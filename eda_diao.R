@@ -38,10 +38,10 @@ merged_data_combined <- rbind(merged_1516, merged_1718)
 head(merged_data_combined)
 
 # See how many missing LBXSCR values there are. Paper didn't do any imputation
-missing_count <- sum(is.na(merged_data_combined$LBXSCR))
-print(paste("Number of missing serum creatinine values:", missing_count))
-print(paste("Number of total people:", nrow(merged_data_combined)))
-print(paste("Response rate:", 1 - (missing_count/nrow(merged_data_combined))))
+#missing_count <- sum(is.na(merged_data_combined$LBXSCR))
+#print(paste("Number of missing serum creatinine values:", missing_count))
+#print(paste("Number of total people:", nrow(merged_data_combined)))
+#print(paste("Response rate:", 1 - (missing_count/nrow(merged_data_combined))))
 
 ### Survey Weights ####
 # "This design object should be created before any subsetting or manipulation of the data" cran.r-project
@@ -52,10 +52,10 @@ nhanesDesign <- svydesign(id = ~SDMVPSU,  # Primary Sampling Units (PSU)
                           nest    = TRUE,      # Whether PSUs are nested within strata
                           data    = merged_data_combined)
 ### response rates ###
-missing_count <- sum(is.na(datasub$LBXSCR))
-print(paste("Number of missing serum creatinine values:", missing_count))
-print(paste("Number of total people:", nrow(datasub)))
-print(paste("Response rate:", 1 - (missing_count/nrow(datasub))))
+#missing_count <- sum(is.na(datasub$LBXSCR))
+#print(paste("Number of missing serum creatinine values:", missing_count))
+#print(paste("Number of total people:", nrow(datasub)))
+#print(paste("Response rate:", 1 - (missing_count/nrow(datasub))))
 
 ### filtering ####
 dfsub <- subset(nhanesDesign , RIDSTATR %in% "Both interviewed and MEC examined") # this line useless, caught by next line
@@ -69,9 +69,6 @@ merged_data_sub <- subset(merged_data_combined, complete.cases(LBXSCR)
                 & RIDAGEYR > 18)
 
 
-merged_data_combined <- merged_data_combined %>%
-  filter(!RIDEXPRG %in% c("Yes, positive lab pregnancy test or self-reported pregnant at exam"))
-
 # The CKD-EPI equation from Levey et al., 2009
 # if with_race == True, then include race in calculation
 calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
@@ -79,7 +76,7 @@ calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
     return(NA)
   }
   
-  if (sex == 1) {  # Male
+  if (sex == "Male") {  # Male
     if (creatinine <= 0.9) {
       eGFR <- 141 * (creatinine / 0.9) ^ -0.411 * 0.993 ^ age
     } else {
@@ -100,21 +97,27 @@ calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
 }
 
 ### adding columns to the raw data and weighted
-merged_data_combined<- merged_data_combined %>%
+merged_data_sub<- merged_data_sub %>%
   mutate(
     eGFR = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = TRUE),
     eGFR_no_race = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = FALSE),
     change_in_eGFR = eGFR_no_race - eGFR
   )
 
+dfsub <- update(dfsub, 
+                eGFR = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = TRUE),
+                eGFR_no_race = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = FALSE),
+                change_in_eGFR = eGFR_no_race - eGFR
+)
+
 
 # Calculate mean eGFR without race adjustment
-mean_egfr_no_race <- merged_data_combined %>%
+mean_egfr_no_race <- merged_data_sub %>%
   group_by(RIDRETH3) %>%
   summarise(mean_eGFR_no_race = mean(eGFR_no_race, na.rm = TRUE))
 
 # Plot without race adjustment
-plot_no_race <- ggplot(merged_data_combined, aes(x = factor(RIDRETH3), y = eGFR_no_race)) +
+plot_no_race <- ggplot(merged_data_sub, aes(x = factor(RIDRETH3), y = eGFR_no_race)) +
   geom_boxplot() +
   geom_text(data = mean_egfr_no_race, aes(x = factor(RIDRETH3), y = mean_eGFR_no_race,
                                           label = sprintf("%.1f", mean_eGFR_no_race)),
@@ -126,12 +129,12 @@ plot_no_race <- ggplot(merged_data_combined, aes(x = factor(RIDRETH3), y = eGFR_
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 # Calculate mean eGFR with race adjustment
-mean_egfr <- merged_data_combined %>%
+mean_egfr <- merged_data_sub %>%
   group_by(RIDRETH3) %>%
   summarise(mean_eGFR = mean(eGFR, na.rm = TRUE))
 
 # Plot with race adjustment
-plot_with_race <- ggplot(merged_data_combined, aes(x = factor(RIDRETH3), y = eGFR)) +
+plot_with_race <- ggplot(merged_data_sub, aes(x = factor(RIDRETH3), y = eGFR)) +
   geom_boxplot() +
   geom_text(data = mean_egfr, aes(x = factor(RIDRETH3), y = mean_eGFR,
                                   label = sprintf("%.1f", mean_eGFR)),
@@ -151,21 +154,10 @@ merged_data_sub_black <- merged_data_sub %>%
 mean_black_eGFR = mean(merged_data_sub_black$eGFR)
 print(mean_black_eGFR)
 
-mean_egfr <- merged_data_combined %>%
-  group_by(RIDRETH3) %>%
-  summarise(mean_eGFR = mean(merged_data_combined$eGFR, na.rm = TRUE))
-print(mean_egfr)
 
-
-dfsub_black = subset(nhanesDesign, RIDRETH3 == "Non-Hispanic Black")
-weighted_median_change_in_eGFR <- svyquantile(~ dfsub_black$change_in_eGFR, design = dfsub_black, quantiles = 0.75)
+dfsub_black = subset(dfsub, RIDRETH3 == "Non-Hispanic Black")
+weighted_median_change_in_eGFR <- svyquantile(~ change_in_eGFR, design = dfsub_black, quantiles = 0.75)
 print(weighted_median_change_in_eGFR)
-
-dfsub <- update(dfsub, 
-                       eGFR = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = TRUE),
-                       eGFR_no_race = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = FALSE),
-                       change_in_eGFR = eGFR_no_race - eGFR
-)
 
 
 ######## Seeing impact of weighting ########
@@ -204,7 +196,7 @@ ggplot(eGFR_averages_long, aes(x = RIDRETH3, y = Value, fill = Measurement)) +
 ###### Recreating Figure 1 in Diao et al., 2020 JAMA Paper ######
 
 # without survery weights
-ggplot(merged_data_sub, aes(x = change_in_eGFR)) +
+ggplot(merged_data_sub_black, aes(x = change_in_eGFR)) +
   geom_histogram(binwidth = 1, fill = "salmon", color = "black", alpha = 0.7) +
   labs(x = expression(paste("change in eGFR ", (mL/min/1.73 ~ m^2), " (no race - race)")),
        y = "Black adults in NHANES (2015-2018)",
@@ -215,7 +207,7 @@ ggplot(merged_data_sub, aes(x = change_in_eGFR)) +
   )
 
 # Histogram with survery weights
-svyhist(~ change_in_eGFR, design = dfsub,
+svyhist(~ change_in_eGFR, design = dfsub_black,
         main = "Changes in Reported eGFR for Black Adults Following Removal of Race From eGFRcr",
         xlab = expression(paste("change in eGFR ", (mL/min/1.73 ~ m^2), " (no race - race)")),
         ylab = "Black adults in NHANES (2015-2018)",
@@ -246,10 +238,10 @@ create_summary_table <- function(cutoff_ranges, implications) {
     se_without_race <- prop_and_se_without_race[prop_and_se_without_race$RIDRETH3 == "Non-Hispanic Black", "se.eGFR_no_race >= lower_cutoff & eGFR_no_race < upper_cutoffTRUE"]
     
     # Unweighted: counts with and without race
-    count_with_race <- merged_data_sub %>%
+    count_with_race <- merged_data_sub_black %>%
       summarise(n = sum(eGFR >= lower_cutoff & eGFR < upper_cutoff, na.rm = TRUE))
     
-    count_without_race <- merged_data_sub %>%
+    count_without_race <- merged_data_sub_black %>%
       summarise(n = sum(eGFR_no_race >= lower_cutoff & eGFR_no_race < upper_cutoff, na.rm = TRUE))
     
     # Weighted: Calculate absolute change in proportions
