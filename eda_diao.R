@@ -244,3 +244,10 @@ grid.draw(myTable)
 # controls number of digits
 options(digits=2)
 
+
+####### Additional testing to make sure Table 1 is accurate, since slightly off from DIAO) #########
+nhanes_srvyr_design <- as_survey(nhanesDesign)
+nhanes_srvyr_design %>%
+  group_by(RIDRETH3) %>%
+  summarize(proportion = survey_mean(eGFR_no_race < 60, na.rm = TRUE))
+
