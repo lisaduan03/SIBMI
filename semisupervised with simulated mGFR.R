@@ -77,7 +77,7 @@ merged_data_sub <- subset(merged_data_combined, complete.cases(SSCYPC, LBXSCR)
 
 ### adding eGFR ####
 calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
-  if (sex == 1) {  # Male
+  if (sex == "Male") {  # Male
     if (creatinine <= 0.9) {
       eGFR <- 141 * (creatinine / 0.9) ^ -0.411 * (0.993 ^ age)
     } else {
@@ -98,6 +98,21 @@ calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
   return(eGFR)
 }
 
+### adding cys C ####
+calculate_eGFRcys <- function(Scys, age, sex, race, with_race) {
+  if (Scys <= 0.8) {
+    eGFRcys <- 133 * (Scys / 0.8) ^ -0.499 * (0.996 ^ age)
+  } else {
+    eGFRcys <- 133 * (Scys / 0.8) ^ -1.328 * (0.996 ^ age)
+  }
+  if (sex == "Female") {
+    eGFRcys <- eGFRcys * 0.932
+  }
+  return(eGFRcys)
+}
+
+
+
 ### adding columns to the raw data and weighted
 merged_data_sub <- merged_data_sub %>%
   mutate(
@@ -106,21 +121,27 @@ merged_data_sub <- merged_data_sub %>%
     change_in_eGFR = eGFR_no_race - eGFR
   )
 
+### adding columns to the raw data and weighted
+merged_data_sub <- merged_data_sub %>%
+  mutate(
+    eGFRcys = mapply(calculate_eGFRcys, Scys = SSCYPC, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH2),
+    change_in_eGFR_cys = eGFRcys - eGFR
+  )
 
 
 ### Survey Weights ####
-## figure out the other weights!!!! WTSCY4YR
+## use WTSCY4YR since there are fewer samples
 nhanesDesign <- svydesign(id = ~SDMVPSU,  # Primary Sampling Units (PSU)
                           strata  = ~SDMVSTRA, # Stratification used in the survey
-                          weights = ~WTMEC4YR,  # according to CDC Weighting Module, use this for 1999-2002 
+                          weights = ~WTSCY4YR,  # according to CDC Weighting Module, use this for 1999-2002 
                           nest    = TRUE,      # Whether PSUs are nested within strata
                           data    = merged_data_sub)
 
 # filtering. 4262 compared to Diao 4434 likely because in April 2022 some records removed from SSCYPC
-#dfsub <- subset(nhanesDesign , RIDSTATR %in% "Both Interviewed and MEC examined") # this line useless, caught by next line
-#dfsub <- subset(nhanesDesign, complete.cases(SSCYPC, LBXSCR) 
-        #        & !RIDEXPRG %in% c("Yes, positive lab pregnancy test or self-reported pregnant at exam")
-         #       & RIDAGEYR > 18)
+dfsub <- subset(nhanesDesign , RIDSTATR %in% "Both Interviewed and MEC examined") # this line useless, caught by next line
+dfsub <- subset(nhanesDesign, complete.cases(SSCYPC, LBXSCR) 
+               & !RIDEXPRG %in% c("Yes, positive lab pregnancy test or self-reported pregnant at exam")
+                & RIDAGEYR > 18)
 
 ### descriptive stats ### matches Diao et al., 2021 (JAMA reply)
 
@@ -146,19 +167,25 @@ svymean( ~ RIDRETH2 , nhanesDesign )
 merged_data_sub_black <- merged_data_sub %>%
   filter(RIDRETH2 == "Non-Hispanic Black")
 mean_eGFR <- mean(merged_data_sub$eGFR, na.rm = TRUE)
+print(mean_eGFR)
 mean_eGFR_no_race <- mean(merged_data_sub$eGFR_no_race, na.rm = TRUE)
+print(mean_eGFR_no_race)
+mean_eGFRcys <- mean(merged_data_sub$eGFRcys, na.rm = TRUE)
+print(mean_eGFRcys)
+
 
 
 dfsub_black = subset(nhanesDesign, RIDRETH2 == "Non-Hispanic Black")
-
-
 svymean( ~ eGFR , dfsub_black )
-
 svymean( ~ eGFR_no_race , dfsub_black )
+svymean( ~ eGFRcys , dfsub_black )
 
 
-weighted_median_change_in_eGFR <- svyquantile(~ change_in_eGFR, design = dfsub_black, quantiles = 0.5)
-print(weighted_median_change_in_eGFR)
+weighted_median_change_in_eGFR_race <- svyquantile(~ change_in_eGFR, design = dfsub_black, quantiles = 0.5)
+print(weighted_median_change_in_eGFR_race)
+weighted_median_change_in_eGFR_cys <- svyquantile(~ change_in_eGFR_cys, design = dfsub_black, quantiles = 0.5)
+print(weighted_median_change_in_eGFR_cys)
+
 
 
 
@@ -234,10 +261,14 @@ create_summary_table <- function(cutoff_ranges, implications) {
     data_table <- data.frame(
       "Implication" = wrapped_implication,
       "eGFR range" = paste(">=", lower_cutoff, "& <", upper_cutoff),
-      "Including Race" = paste0(count_with_race$n, " (", format(prop_with_race * 100, nsmall = 2), ")"),
-      "Removing Race" = paste0(count_without_race$n, " (", format(prop_without_race * 100, nsmall = 2), ")"),
-      "Absolute change, weighted % (95% CI)" = paste0(format(absolute_change * 100, nsmall = 2),
-                                                      " (", format(ci_low * 100, nsmall = 2), ", ", format(ci_high * 100, nsmall = 2), ")")    )
+      "eGFRcr with Race" = paste0(count_with_race$n, " (", format(prop_with_race * 100, nsmall = 2), ")"),
+      "eGFR without race" = paste0(count_without_race$n, " (", format(prop_without_race * 100, nsmall = 2), ")"),
+      "eGFRcys" = paste0(count_without_race$n, " (", format(prop_without_race * 100, nsmall = 2), ")"),
+      "Race change, weighted % (95% CI)" = paste0(format(absolute_change * 100, nsmall = 2),
+                                                      " (", format(ci_low * 100, nsmall = 2), ", ", format(ci_high * 100, nsmall = 2), ")") ,   
+      "Cys change, weighted % (95% CI)" = paste0(format(absolute_change * 100, nsmall = 2),
+                                                                 " (", format(ci_low * 100, nsmall = 2), ", ", format(ci_high * 100, nsmall = 2), ")")    
+      )
     
     
     # Append current data table to list
