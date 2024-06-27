@@ -43,6 +43,15 @@ print(paste("Number of missing serum creatinine values:", missing_count))
 print(paste("Number of total people:", nrow(merged_data_combined)))
 print(paste("Response rate:", 1 - (missing_count/nrow(merged_data_combined))))
 
+### Survey Weights ####
+# "This design object should be created before any subsetting or manipulation of the data" cran.r-project
+# "a good rule of thumb is to use "the least common denominator" -- from weighting module, so we use MEC not INT
+nhanesDesign <- svydesign(id = ~SDMVPSU,  # Primary Sampling Units (PSU)
+                          strata  = ~SDMVSTRA, # Stratification used in the survey
+                          weights = ~ifelse(SDDSRVYR %in% c(9, 10), 0.5 * WTMEC2YR, WTMEC2YR),  # according to CDC Weighting Module
+                          nest    = TRUE,      # Whether PSUs are nested within strata
+                          data    = merged_data_combined)
+
 # The CKD-EPI equation from Levey et al., 2009
 # if with_race == True, then include race in calculation
 calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
@@ -72,44 +81,21 @@ calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
   return(eGFR)
 }
 
-merged_data_combined$eGFR <- mapply(calculate_eGFR, 
-                                    creatinine = merged_data_combined$LBXSCR, 
-                                    age = merged_data_combined$RIDAGEYR, 
-                                    sex = merged_data_combined$RIAGENDR, 
-                                    race = merged_data_combined$RIDRETH3,
-                                    with_race = TRUE)
-merged_data_combined$eGFR_no_race <- mapply(calculate_eGFR,
-                                            creatinine = merged_data_combined$LBXSCR, 
-                                            age = merged_data_combined$RIDAGEYR, 
-                                            sex = merged_data_combined$RIAGENDR,
-                                            race = merged_data_combined$RIDRETH3,
-                                            with_race = FALSE)
-
-# calculate the change in eGFR after race is removed
+### adding columns to the raw data and weighted
 merged_data_combined <- merged_data_combined %>%
-  mutate(change_in_eGFR = eGFR_no_race - eGFR)
-
-#merged_data_combined <- merged_data_combined %>%
-#  mutate(
-#    ineligible_donate = (eGFR < 60) | (HIV == 1) | (HBV == 1) | (HCV == 1) | (diabetes == 1) | (BMI > 35) | (cancer_past_5_years == 1)
-#  )
-
-# display the first few rows with the new eGFR columns
-head(merged_data_combined)
+  mutate(
+    eGFR = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = TRUE),
+    eGFR_no_race = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = FALSE),
+    change_in_eGFR = eGFR_no_race - eGFR
+  )
 
 
+nhanesDesign <- update(nhanesDesign, 
+                       eGFR = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = TRUE),
+                       eGFR_no_race = mapply(calculate_eGFR, creatinine = LBXSCR, age = RIDAGEYR, sex = RIAGENDR, race = RIDRETH3, with_race = FALSE),
+                       change_in_eGFR = eGFR_no_race - eGFR
+)
 
-#dfsub = subset(nhanesDesign, merged_data_combined$RIDRETH3=="Non-Hispanic Black")
-#datasub = merged_data_combined[merged_data_combined$RIDRETH3=="Non-Hispanic Black",]
-
-### Survey Weights ####
-# "This design object should be created before any subsetting or manipulation of the data" cran.r-project
-# "a good rule of thumb is to use "the least common denominator" -- from weighting module, so we use MEC not INT
-nhanesDesign <- svydesign(id = ~SDMVPSU,  # Primary Sampling Units (PSU)
-                          strata  = ~SDMVSTRA, # Stratification used in the survey
-                          weights = ~ifelse(SDDSRVYR %in% c(9, 10), 0.5 * WTMEC2YR, WTMEC2YR),  # according to CDC Weighting Module
-                          nest    = TRUE,      # Whether PSUs are nested within strata
-                          data    = merged_data_combined)
 
 ######## Seeing impact of weighting ########
 library(dplyr)
@@ -254,4 +240,7 @@ print(summary_table)
 myTable <- tableGrob(summary_table)
 library(grid)
 grid.draw(myTable)
+
+# controls number of digits
+options(digits=2)
 
