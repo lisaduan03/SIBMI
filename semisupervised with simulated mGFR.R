@@ -6,6 +6,7 @@ library(dplyr)
 library(stringr)
 library(gridExtra)
 
+
 ##### Loading in data ######
 # load DEMO data for 1999-2000
 nhanesTables(data_group='DEMO', year=1999)
@@ -20,7 +21,7 @@ Demo_9900select <- Demo_9900[c("SEQN", "RIDEXPRG", "RIAGENDR", "RIDAGEYR", "RIDR
 biopro_9900select <- biopro_9900[c("SEQN", "LBXSCR")]
 cyst_9900select <- cyst_9900[c("SEQN", "SSCYPC", "WTSCY4YR")] #  Surplus sera cystatin 99-02 weights
 # merging on ID (SEQN)
-merged_9900 <- merge(Demo_9900select, biopro_9900select, by = "SEQN", all = TRUE)
+merged_9900 <- merge(Demo_9900select, biopro_9900, by = "SEQN", all = TRUE)
 merged_9900 <- merge(merged_9900, cyst_9900select, by = "SEQN", all = TRUE)
 
 # standardizing serum creatinine
@@ -41,10 +42,15 @@ cyst_0102 <- nhanes("SSCYST_B")
 Demo_0102select <- Demo_0102[c("SEQN", "RIDEXPRG", "RIAGENDR", "RIDAGEYR", "RIDRETH2", "SDMVPSU", "SDMVSTRA", "WTMEC4YR", "SDDSRVYR", "RIDSTATR")]
 biopro_0102select <- biopro_0102[c("SEQN", "LBDSCR")]
 cyst_0102select <- cyst_0102[c("SEQN", "SSCYPC", "WTSCY4YR")] #  Surplus sera cystatin 99-02 weights
-merged_0102 <- merge(Demo_0102select, biopro_0102select, by = "SEQN", all = TRUE)
+merged_0102 <- merge(Demo_0102select, biopro_0102, by = "SEQN", all = TRUE)
 merged_0102 <- merge(merged_0102, cyst_0102select, by = "SEQN", all = TRUE)
 merged_0102 <- merged_0102 %>% 
-  rename(LBXSCR = LBDSCR)
+  rename(LBXSCR = LBDSCR) %>%  # manually rename to be same as 9900
+  rename(LBXSAPSI = LBDSAPSI ) %>% 
+  rename(LBXSPH = LBDSPH) %>% 
+  rename(LBXSLDSI = LBDSLDSI) %>% 
+  rename(LBXSTB = LBDSTB)
+  
 head(merged_0102)
 
 
@@ -214,6 +220,9 @@ svyhist(~ change_in_eGFR, design = dfsub_black,
         border = "black",
         cex.main = 0.8)
 
+merged_data_sub_black$less60 <- if_else(merged_data_sub_black$eGFR <= 60, 1, 0)
+merged_data_sub_black$btwn <- if_else(merged_data_sub_black$eGFR <= 29 & merged_data_sub_black$eGFR >= 15, 1, 0)
+sum(merged_data_sub_black$btwn)
 
 ######## Table 1 ########
 # function that takes in cutoff ranges and implication name, creates row in a table
@@ -228,14 +237,20 @@ create_summary_table <- function(cutoff_ranges, implications) {
     upper_cutoff <- cutoff_range[2]
     
     # Weighted: proportions with race
-    prop_and_se_with_race <- svyby(~(eGFR >= lower_cutoff & eGFR < upper_cutoff), ~RIDRETH2, design = dfsub_black, svymean, na.rm = TRUE) # mean of many 1s and 0s = proportion 
-    prop_with_race <- prop_and_se_with_race["eGFR >= lower_cutoff & eGFR < upper_cutoffTRUE"]
-    se_with_race <- prop_and_se_with_race["se.eGFR >= lower_cutoff & eGFR < upper_cutoffTRUE"]
+    prop_and_se_with_race <- svyby(~(eGFR > lower_cutoff & eGFR < upper_cutoff), ~RIDRETH2, design = dfsub_black, svymean, na.rm = TRUE) # mean of many 1s and 0s = proportion 
+    prop_with_race <- prop_and_se_with_race["eGFR > lower_cutoff & eGFR < upper_cutoffTRUE"]
+    se_with_race <- prop_and_se_with_race["se.eGFR > lower_cutoff & eGFR < upper_cutoffTRUE"]
     
     # Weighted:  proportions without race
-    prop_and_se_without_race <- svyby(~(eGFR_no_race >= lower_cutoff & eGFR_no_race < upper_cutoff), ~RIDRETH2, design = dfsub_black, svymean, na.rm = TRUE)
-    prop_without_race <- prop_and_se_without_race[prop_and_se_without_race$RIDRETH2 == "Non-Hispanic Black", "eGFR_no_race >= lower_cutoff & eGFR_no_race < upper_cutoffTRUE"]
-    se_without_race <- prop_and_se_without_race[prop_and_se_without_race$RIDRETH2 == "Non-Hispanic Black", "se.eGFR_no_race >= lower_cutoff & eGFR_no_race < upper_cutoffTRUE"]
+    prop_and_se_without_race <- svyby(~(eGFR_no_race > lower_cutoff & eGFR_no_race < upper_cutoff), ~RIDRETH2, design = dfsub_black, svymean, na.rm = TRUE)
+    prop_without_race <- prop_and_se_without_race[prop_and_se_without_race$RIDRETH2 == "Non-Hispanic Black", "eGFR_no_race > lower_cutoff & eGFR_no_race < upper_cutoffTRUE"]
+    se_without_race <- prop_and_se_without_race[prop_and_se_without_race$RIDRETH2 == "Non-Hispanic Black", "se.eGFR_no_race > lower_cutoff & eGFR_no_race < upper_cutoffTRUE"]
+    
+    # Weighted: proportions with cys 
+    prop_and_se_cys <- svyby(~(eGFRcys > lower_cutoff & eGFRcys < upper_cutoff), ~RIDRETH2, design = dfsub_black, svymean, na.rm = TRUE) # mean of many 1s and 0s = proportion 
+    prop_cys <- prop_and_se_cys["eGFRcys > lower_cutoff & eGFRcys < upper_cutoffTRUE"]
+    se_cys <- prop_and_se_cys["se.eGFRcys > lower_cutoff & eGFRcys < upper_cutoffTRUE"]
+    
     
     # Unweighted: counts with and without race
     count_with_race <- merged_data_sub_black %>%
@@ -244,15 +259,25 @@ create_summary_table <- function(cutoff_ranges, implications) {
     count_without_race <- merged_data_sub_black %>%
       summarise(n = sum(eGFR_no_race >= lower_cutoff & eGFR_no_race < upper_cutoff, na.rm = TRUE))
     
+    count_cys <- merged_data_sub_black %>%
+      summarise(n = sum(eGFRcys >= lower_cutoff & eGFRcys < upper_cutoff, na.rm = TRUE))
+    
     # Weighted: Calculate absolute change in proportions
-    absolute_change <- prop_without_race - prop_with_race
+    absolute_change_race <- prop_without_race - prop_with_race
+    absolute_change_cys <- prop_cys - prop_with_race
     
     # Weighted: formula SE of difference of two proportions
-    se_absolute_change <- sqrt(se_with_race^2 + se_without_race^2)
+    se_absolute_change_race <- sqrt(se_with_race^2 + se_without_race^2)
+    se_absolute_change_cys <- sqrt(se_with_race^2 + se_cys^2)
+    
     
     # CIs
-    ci_low <- absolute_change - 1.96 * se_absolute_change
-    ci_high <- absolute_change + 1.96 * se_absolute_change
+    ci_low_race <- se_absolute_change_race - 1.96 * se_absolute_change_race
+    ci_high_race <- se_absolute_change_race + 1.96 * se_absolute_change_race
+    
+    ci_low_cys <- se_absolute_change_cys - 1.96 * se_absolute_change_cys
+    ci_high_cys <- se_absolute_change_cys + 1.96 * se_absolute_change_cys
+    
     
     # Wrap long text text to fit in the table
     wrapped_implication <- str_wrap(implication, width = 40)  # Adjust width as needed
@@ -260,14 +285,14 @@ create_summary_table <- function(cutoff_ranges, implications) {
     # creating row in table 
     data_table <- data.frame(
       "Implication" = wrapped_implication,
-      "eGFR range" = paste(">=", lower_cutoff, "& <", upper_cutoff),
+      "eGFR range" = paste(">", lower_cutoff, "& <", upper_cutoff),
       "eGFRcr with Race" = paste0(count_with_race$n, " (", format(prop_with_race * 100, nsmall = 2), ")"),
       "eGFR without race" = paste0(count_without_race$n, " (", format(prop_without_race * 100, nsmall = 2), ")"),
-      "eGFRcys" = paste0(count_without_race$n, " (", format(prop_without_race * 100, nsmall = 2), ")"),
-      "Race change, weighted % (95% CI)" = paste0(format(absolute_change * 100, nsmall = 2),
-                                                      " (", format(ci_low * 100, nsmall = 2), ", ", format(ci_high * 100, nsmall = 2), ")") ,   
-      "Cys change, weighted % (95% CI)" = paste0(format(absolute_change * 100, nsmall = 2),
-                                                                 " (", format(ci_low * 100, nsmall = 2), ", ", format(ci_high * 100, nsmall = 2), ")")    
+      "eGFRcys" = paste0(count_cys$n, " (", format(prop_cys * 100, nsmall = 2), ")"),
+      "Race change, weighted % (95% CI)" = paste0(format(absolute_change_race * 100, nsmall = 2),
+                                                      " (", format(ci_low_race * 100, nsmall = 2), ", ", format(ci_high_race * 100, nsmall = 2), ")") ,   
+      "Cys change, weighted % (95% CI)" = paste0(format(se_absolute_change_cys * 100, nsmall = 2),
+                                                                 " (", format(ci_low_cys * 100, nsmall = 2), ", ", format(ci_high_cys * 100, nsmall = 2), ")")    
       )
     
     
@@ -301,4 +326,83 @@ nhanes_srvyr_design <- as_survey(dfsub_black)
 nhanes_srvyr_design %>%
   summarize(proportion = survey_mean(eGFR_no_race < 60, na.rm = TRUE))
 
+
+### Simulating mGFR values from eGFR values. What is the likely range of mGFR at a given eGFR? ###
+
+# Each percentile of mGFR can be calculated as follows: Intercept + (eGFR value * eGFR coefficient)
+regression_coefficients <- data.frame(
+  "Equation" = c("CKD-EPI Creatinine", "CKD-EPI Cystatin C"),
+  "2.5th_Quantile" = I(list(c(-2.34, 0.65), c(9.72, 0.41))),
+  "10th_Quantile" = I(list(c(2.00, 0.72), c(12.23, 0.51))),
+  "25th_Quantile" = I(list(c(2.64, 0.82), c(15.13, 0.59))),
+  "50th_Quantile" = I(list(c(4.28, 0.91), c(17.57, 0.67))),
+  "75th_Quantile" = I(list(c(7.88, 0.99), c(22.04, 0.72))),
+  "90th_Quantile" = I(list(c(11.95, 1.06), c(28.64, 0.75))),
+  "97.5th_Quantile" = I(list(c(20.33, 1.11), c(40.32, 0.77)))
+)
+
+# function to calcultaae mGFR based on eGFR and regression coefficients
+calculate_mGFR <- function(eGFR, equation_type = "CKD-EPI Creatinine") {
+  # Check if the equation type is valid
+  if(!(equation_type %in% regression_coefficients$Equation)) {
+    stop("Invalid equation type. Choose either 'CKD-EPI Creatinine' or 'CKD-EPI Cystatin C'.")
+  }
+  
+  coefficients <- regression_coefficients[regression_coefficients$Equation == equation_type,]
+  mGFR_values <- list() # to store mGFR values for each quantile
+  quantiles <- c(2.5, 10, 25, 50, 75, 90, 97.5) / 100
+  
+  for (i in seq_along(quantiles)) {
+    quantile_name <- colnames(coefficients)[i + 1]
+    intercept <- coefficients[[quantile_name]][[1]][1]
+    coefficient <- coefficients[[quantile_name]][[1]][2]
+    mGFR_values[[i]] <- intercept + (eGFR * coefficient)
+  }
+  
+  
+  # continuous approximation of mGFR based on the quantiles
+  approx_quantile_function <- approxfun(quantiles, unlist(mGFR_values), method = "linear", rule = 2) # or should I do linear?
+  # smooth? approx_quantile_function <- splinefun(quantiles, unlist(mGFR_values), method = "natural")
+  
+  
+  # sample quantile from uniform distribution, then compute the corresponding mGFR
+  sampled_quantile <- runif(1)
+  mGFR_value <- approx_quantile_function(sampled_quantile)
+  
+  return(mGFR_value)
+}
+
+# using the funciton
+eGFR_value <- 90
+mGFR_value <- calculate_mGFR(eGFR_value)
+
+# add a new column in merged_data_sub for simluated mGFR
+merged_data_sub <- merged_data_sub %>%
+  mutate(simulated_mGFR = NA)
+  
+# 10% labeled
+sample_indices <- sample(seq_len(nrow(merged_data_sub)), size = 0.1 * nrow(merged_data_sub))
+merged_data_sub_10 <- merged_data_sub %>%
+  mutate(simulated_mGFR = ifelse(row_number() %in% sample_indices, 
+                                 sapply(eGFR, calculate_mGFR), 
+                                 NaN))
+
+# 25% labeled
+sample_indices <- sample(seq_len(nrow(merged_data_sub)), size = 0.25 * nrow(merged_data_sub))
+merged_data_sub_25 <- merged_data_sub %>%
+  mutate(simulated_mGFR = ifelse(row_number() %in% sample_indices, 
+                                 sapply(eGFR, calculate_mGFR), 
+                                 NaN))
+
+
+# 50% labeled
+sample_indices <- sample(seq_len(nrow(merged_data_sub)), size = 0.5 * nrow(merged_data_sub))
+merged_data_sub_50 <- merged_data_sub %>%
+  mutate(simulated_mGFR = ifelse(row_number() %in% sample_indices, 
+                                 sapply(eGFR, calculate_mGFR), 
+                                 NaN))
+# saving stuff
+write.csv(merged_data_sub_10, file = "/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/merged_data_sub_10.csv", row.names = FALSE)
+write.csv(merged_data_sub_25, file = "/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/merged_data_sub_25.csv", row.names = FALSE)
+write.csv(merged_data_sub_50, file = "/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/merged_data_sub_50.csv", row.names = FALSE)
 
