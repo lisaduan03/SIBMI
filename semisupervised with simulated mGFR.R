@@ -90,10 +90,11 @@ calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
       eGFR <- 141 * (creatinine / 0.9) ^ -1.209 * (0.993 ^ age)
     }
   } else {  # Female
+    print("FEMALE SEX creatinine")
     if (creatinine <= 0.7) {
-      eGFR <- 144 * (creatinine / 0.7) ^ -0.329 * (0.993 ^ age)
+      eGFR <- 143.538 * (creatinine / 0.7) ^ -0.329 * (0.993 ^ age)
     } else {
-      eGFR <- 144 * (creatinine / 0.7) ^ -1.209 * (0.993 ^ age)
+      eGFR <- 143.538 * (creatinine / 0.7) ^ -1.209 * (0.993 ^ age)
     }
   }
   # Adjust for Black race
@@ -104,13 +105,10 @@ calculate_eGFR <- function(creatinine, age, sex, race, with_race) {
   return(eGFR)
 }
 
-### adding cys C ####
+### adding cys C #### 
+# https://www.niddk.nih.gov/research-funding/research-programs/kidney-clinical-research-epidemiology/laboratory/glomerular-filtration-rate-equations/adults#ckd-epi-cystatin-c
 calculate_eGFRcys <- function(Scys, age, sex, race, with_race) {
-  if (Scys <= 0.8) {
-    eGFRcys <- 133 * (Scys / 0.8) ^ -0.499 * (0.996 ^ age)
-  } else {
-    eGFRcys <- 133 * (Scys / 0.8) ^ -1.328 * (0.996 ^ age)
-  }
+  eGFRcys <- 133 * min(Scys / 0.8, 1) ^ -0.499 * max(Scys / 0.8, 1) ^ -1.328 * (0.996 ^ age)
   if (sex == "Female") {
     eGFRcys <- eGFRcys * 0.932
   }
@@ -118,6 +116,17 @@ calculate_eGFRcys <- function(Scys, age, sex, race, with_race) {
 }
 
 
+### Previous implementation produces same results: calculate_eGFRcys <- function(Scys, age, sex, race, with_race) {
+  if (Scys <= 0.8) {
+    eGFRcys <- 133 * (Scys / 0.8) ^ -0.499 * (0.9962 ^ age)
+  } else {
+    eGFRcys <- 133 * (Scys / 0.8) ^ -1.328 * (0.9962 ^ age)
+  }
+  if (sex == "Female") {
+    eGFRcys <- eGFRcys * 0.932
+  }
+  return(eGFRcys)
+}
 
 ### adding columns to the raw data and weighted
 merged_data_sub <- merged_data_sub %>%
@@ -220,6 +229,7 @@ svyhist(~ change_in_eGFR, design = dfsub_black,
         border = "black",
         cex.main = 0.8)
 
+# random testingcounts for table 1
 merged_data_sub_black$less60 <- if_else(merged_data_sub_black$eGFR <= 60, 1, 0)
 merged_data_sub_black$btwn <- if_else(merged_data_sub_black$eGFR <= 29 & merged_data_sub_black$eGFR >= 15, 1, 0)
 sum(merged_data_sub_black$btwn)
