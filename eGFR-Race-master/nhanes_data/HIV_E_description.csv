@@ -1,0 +1,5 @@
+"Code or Value","Value Description","Count","Cumulative","Skip to Item","var_name"
+"1","Positive",12,12,NA,"LBDHI"
+"2","Negative",2792,2804,NA,"LBDHI"
+"3","Indeterminate",2,2806,NA,"LBDHI"
+".","Missing",253,3059,NA,"LBDHI"
