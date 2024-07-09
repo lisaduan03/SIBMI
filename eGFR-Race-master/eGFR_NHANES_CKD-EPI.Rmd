@@ -1,0 +1,2035 @@
+---
+title: "Clinical Implications for Black Americans of Removing Race from CKD-EPI Estimates of Kidney Function"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+author: 
+- James A. Diao$^{1-3}$
+- Gloria J. Wu$^{1-2}$
+- Jason K. Wang$^{1-3}$
+- Herman A. Taylor$^{4}$
+- John K. Tucker$^{5}$
+- Neil R. Powe$^{6}$
+- Isaac S. Kohane$^{1-2}$
+- Arjun K. Manrai$^{1-2}$
+output: 
+  pdf_document
+header-includes:
+  - \usepackage{caption}
+---
+
+$^1$ Computational Health Informatics Program, Boston Children’s Hospital, Boston, MA  
+$^2$ Department of Biomedical Informatics, Harvard Medical School, Boston, MA  
+$^3$ Program in Health Sciences and Technology, Harvard Medical School, Boston, MA  
+$^4$ Cardiovascular Research Institute, Morehouse Medical School, Atlanta, GA  
+$^5$ Division of Renal Medicine, Brigham and Women’s Hospital, Boston, MA  
+$^6$ Department of Medicine, University of California, San Francisco, CA  
+
+## Abstract
+
+**Importance:** Over the past year, multiple medical centers have elected to remove race from estimates of glomerular filtration rate (eGFR) from serum creatinine. The broad impact of recommended changes in clinical care on the Black American population is unclear.
+
+**Objective:** To quantify the number and proportion of Black Americans with changes in care recommended by authoritative guidelines following removal of race from eGFR equations using National Health and Nutrition Examination Survey (NHANES) data.
+
+**Design, Setting, and Participants:** Nationally-representative cross-sectional questionnaires and medical examinations conducted between 2001-2018 by the National Health and Nutrition Examination Survey (NHANES). 91351 participants were sampled from the civilian, noninstitutionalized U.S. population, including 9522 non-pregnant, non-Hispanic Black adults with recorded serum creatinine measurements.
+
+**Main Outcomes and Measures:** New diagnoses of chronic kidney disease (CKD), reclassifications of CKD stage, recommended changes in drug dosing or contraindications, or changes in eligibility for kidney donation, kidney transplantation, specialist care, or oncology clinical trials.
+
+**Results:** Removal of race is expected to assign a new diagnosis of CKD to 4.0% [95% CI, 2.7-5.9%] of Black Americans and a more severe stage of disease to 31.9% [95% CI, 23.7-41.0%] of Black Americans with CKD. At a national scale, approximately 1.1 million new diagnoses [95% CI, 0.7-1.6 million] and 1.2 million stage reclassifications [95% CI, 0.9-1.6 million] would be expected. The number of Black patients eligible for kidney transplant is expected to increase by 7.7% [95% CI, 1.7-13.7%] and the expected number ineligible to donate more than doubles (+117.7% [95% CI, 89.9-145.6%]), while eGFR-based nephrologist referrals may increase by 28.4% [95% CI, 15.6-41.2%]. The number of Black patients ineligible for some National Cancer Institute-sponsored clinical trials is expected to increase by 87.8% [95% CI, 38.4-137.2%]. The number of Black patients with dose reductions to and contraindications for ACE inhibitors, beta-blockers, metformin, SGLT2 inhibitors, anticoagulants, NSAIDs, opioids, and chemotherapeutics is expected to increase by 25.3-87.8% in indicated populations.
+
+**Conclusions and Relevance:** Increased removal of race from estimates of kidney function may lead to far-reaching changes in care for a significant fraction of Black Americans in terms of CKD status and stage, kidney transplantation, clinical trial eligibility, and drug dosing. 
+
+
+\captionsetup[table]{labelformat=empty}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.height = 3.7, cache = FALSE, warning = FALSE, message = FALSE)
+require(knitr)
+require(kableExtra)
+require(stringr)
+require(reldist)
+require(ggplot2)
+require(ggsci)
+require(scales)
+require(tidyr)
+require(dplyr)
+require(binom)
+require(survey)
+require(RNHANES)
+options(knitr.table.format = "latex")
+setwd("/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/eGFR-Race-master")
+```
+
+```{r analysis_params} 
+# Whether to show NHANES plots or just sample-corrected US plots
+SHOW_US_ONLY <- TRUE
+# Use CKD-EPI equation
+use_CKD_EPI <- TRUE
+# Years of NHANES to include
+cycle_years_input <- 1999:2002
+# CDC age bins 
+cdc_breaks <- c(0, 18, 45, 65, 75, 100)
+cdc_labels <- c("0-17","18-44","45-64","65-74","75+")
+census_breaks <- c(0, 18, 20, 25, 30, 35, 40, 45, 
+                   50, 55, 60, 65, 70, 75, 80, 85)
+census_labels <- c("0-17","18-19","20-24","25-29",
+                   "30-34","35-39","40-44",
+                   "45-49","50-54","55-59","60-64",
+                   "65-69","70-74","75-79","80-84")
+# JAMA colors
+jama_blue <- "#0072B5FF"
+jama_red <- "#BC3C29FF"
+jama_green <- "#20854EFF"
+
+# Within how many years must cancer diagnosis have occurred 
+# to be included in the cancer patient subpopulation
+diagnosis_threshold <- 5
+# Defining CKD 
+alb_cr_ratio_threshold <- 30
+
+# For carboplatin dosing
+untreated_AUC <- 7
+treated_AUC <- 5
+mid_AUC <- mean(untreated_AUC, treated_AUC)
+```
+
+```{r general_functions}
+# Convert missing to "No" or FALSE or anything else
+na_to_F <- function(vec, alt = FALSE) {
+  return(replace(vec, is.na(vec), alt))
+}
+na_to_No <- function(vec, alt = "No") {
+  return(replace(vec, is.na(vec), alt))
+}
+# Compute eGFR based on 4-variable MDRD 
+# https://www.kidney.org/content/mdrd-study-equation
+# Capped used for carboplatin dosing calculation
+get_MDRD <- function(SCr, age, female, black, capped = FALSE) {
+  if (capped)
+    SCr <- pmax(SCr, 0.7)
+  female_coef <- ifelse(female, 0.742, 1)
+  black_coef <- ifelse(black, 1.212, 1)
+  return(175 * SCr^(-1.154) * age^(-0.203) * female_coef * black_coef)
+}
+# Compute eGFR based on CKD-EPI 2009 
+# https://www.kidney.org/content/ckd-epi-creatinine-equation-2009
+# Capped used for carboplatin dosing calculation
+get_CKD_EPI <- function(SCr, age, female, black, capped = FALSE) {
+  if (capped)
+    SCr <- pmax(SCr, 0.7)
+  alpha = ifelse(female, -0.329, -0.411)
+  kappa = ifelse(female, 0.7, 0.9)
+  female_coef <- ifelse(female, 1.018, 1)
+  black_coef <- ifelse(black, 1.159, 1)
+  lab_term <- 141 * pmin(SCr/kappa, 1)^alpha * pmax(SCr/kappa, 1)^(-1.209)
+  demographic_term <- 0.993^age * female_coef * black_coef
+  return(lab_term * demographic_term)
+}
+
+if (use_CKD_EPI) {
+  get_eGFR <- get_CKD_EPI
+  use_captions <- TRUE
+} else {
+  get_eGFR <- get_MDRD
+  use_captions <- FALSE
+}
+
+# Rounded, weighted versions of aggregation functions
+rw_quantile <- function(x, w, q, na.rm = TRUE) { return(wtd.quantile(as.numeric(x), q=q, na.rm = na.rm, weight = w)) }
+rw_IQR <- function(x, w, digits=5) { round(rw_quantile(x, w, q=c(0.25, 0.75)) %>% diff, digits) }
+rw_median <- function(x, w, digits=5) { round(rw_quantile(x, w, q=c(0.5)), digits) }
+rw_percent <- function(x, w, digits=5) { round(100*weighted.mean(x, w, na.rm=TRUE), digits)}
+rw_percentyes <- function(x, w, digits=5) { round(100*weighted.mean(x=="Yes", w, na.rm=TRUE), digits)}
+r_sum <- function(x) { x %>% sum() %>% round() %>% return() }
+
+# Succint footnote markers for latex tables
+format_1 <- function(x) {format(x, digits=1, nsmall=1)}
+comma_to_num <- function(x) {
+  return(as.numeric(trimws(gsub(",","",x))))
+}
+
+save_table <- function(table, title) {
+  write.table(table, sep = "\t", row.names = FALSE, quote = FALSE, 
+              sprintf("tables/%s/%s.tsv",
+                      ifelse(use_CKD_EPI, "CKD-EPI","MDRD"), 
+                      title))
+}
+
+save_latex <- function(table, title) {
+  save_kable(table, 
+             sprintf("tables/%s/%s.pdf", 
+                     ifelse(use_CKD_EPI, "CKD-EPI","MDRD"), 
+                     title))
+}
+```
+
+```{r NHANES_data_params}
+# Which variables to keep from each data file
+keep_var <- list(
+  DEMO = c("RIDRETH1","RIDRETH3","RIAGENDR","RIDAGEYR",
+           "RIDEXPRG","WTINT2YR","WTMEC2YR","SDMVPSU","SDMVSTRA"),
+  HIQ = c("HIQ031B","HIQ260"),
+  BIOPRO = c("LBXSCR","LBDSCRSI"),
+  BMX = c("BMXWT","BMXHT","BMXBMI"),
+  MCQ = c("MCQ220","MCQ160N","MCD180N",
+          sprintf("MCQ160%s", c(LETTERS[2:6])),
+          sprintf("MCQ1800%s", c(LETTERS[2:6])),
+          sprintf("MCQ230%s", c(LETTERS[1:4])),
+          sprintf("MCD240%s", c(LETTERS[1:4])),
+          sprintf("MCQ240%s", c(LETTERS,"AA","BB","CC","DD","DK"))),
+  ALB_CR = c("URXUMA","URXUCR","URDACT"),
+  KIQ_U = c("KIQ025", "KIQ026"),
+  BPX = c("BPXSY1","BPXSY2","BPXSY3","BPXDI1","BPXDI2","BPXDI3"),
+  BPQ = c("BPQ030","BPQ040A"), 
+  DIQ = c("DIQ010","DIQ050","DID070","DIQ160","DIQ175A"),
+  GLU = c("LBXGLU"),
+  GHB = c("LBXGH"),
+  HIV = c("LBDHI", "LBXHIVC","LBXHIV1","LBXHIV2","LBXHNAT"),
+  HEPC = c("LBDHCI","LBXHCR"),
+  HEPBD = c("LBDHBG"),
+  SMQRTU = c("SMDANY"),
+  RXQ_RX = c("RXDUSE","RXDCOUNT","RXDDRUG","RXDDRGID")
+)
+
+# Variables that lead to duplicate SEQN identifiers and must be nested
+rx_multiples <- c("RXDDRUG","RXDDRGID")
+
+# `to_rm` and `to_add` are paired vectors that account for naming exceptions
+to_rm <- c("GLU_J")
+to_add <- c("DEMO_J")
+
+if (2001 %in% cycle_years_input) {
+  to_rm <- c(to_rm, "BIOPRO_B","ALB_CR_B","GHB_B","SMQRTU_B",
+             "HEPC_B","HEPBD_B","HIV_B","GLU_B")#,"TRIGLY_B")
+  to_add <- c(to_add, "L40_B","L16_B","L10_B","SMQMEC_B",
+              "L02_B","L02_B","L03_B","L10AM_B")#,"L13AM_B")
+}
+
+if (1999 %in% cycle_years_input) {
+  to_rm <- c(to_rm, "BIOPRO_A", "ALB_CR", "KIQ_U", "GLU", "GHB", "HIV", "HEPC", "SMQRTU")
+  to_add <- c(to_add, "LAB18", "LAB16", "KIQ", "LAB10AM", "LAB10", "LAB03", "LAB02", "SMQMEC")
+}
+
+if (2003 %in% cycle_years_input) {
+  to_rm <- c(to_rm, "BIOPRO_C","ALB_CR_C","GHB_C","SMQRTU_C",
+             "HEPC_C","HEPBD_C","HIV_C","GLU_C")#,"TRIGLY_C")
+  to_add <- c(to_add, "L40_C","L16_C","L10_C","SMQMEC_C",
+              "L02_C","L02_C","L03_C","L10AM_C")#,"L13AM_C")
+}
+
+# columns to convert to numeric after loading
+num_cols <- c("SEQN","RIDAGEYR","SDMVPSU","SDMVSTRA",
+              keep_var$BIOPRO, keep_var$BMX, keep_var$GLU, 
+              keep_var$ALB_CR, keep_var$GHB, keep_var$BPX)
+# Age columns across many cancer types to collapse 
+# into a single "cancer age" column after loading
+cancer_age_cols <- c(keep_var$MCQ[grep("240", keep_var$MCQ)])
+```
+
+\newpage
+# eGFR Functions
+
+- $\text{MDRD}: 175 \times (\text{SCr})^{-1.154} \times (\text{age})^{-0.203} \times 0.742 \, [\text{if female}] \times 1.212 \, [\text{if Black}]$  
+
+- $\text{CKD-EPI}: 141 \times \min(\text{SCr}/\kappa, 1)^{\alpha} \times \max(\text{SCr}/\kappa, 1)^{-1.209} \times (0.993)^{\text{age}} \times 1.018 \, [\text{if female}] \times 1.159 \, [\text{if Black}]$  
+    - $\kappa = 0.7$ (females) or $0.9$ (males)
+    - $\alpha = -0.329$ (females) or $-0.411$ (males)
+
+# Download NHANES Data 
+- Demographic Variables (DEMO)
+- Smoking (SMQRTU)
+- Body Measures (BMX)
+- Blood Pressure (BPX)
+- Standard Biochemistry Profile (BIOPRO)
+- Albumin & Creatinine - Urine (ALB_CR)
+- Glycohemoglobin (GHB)
+- Medical Conditions (MCQ)
+- Diabetes (DIQ)
+- Kidney Conditions - Urology (KIQ)
+- HIV Antibody Test (HIV)
+- Hepatitis B: Core antibody; surface antigen (HEPBD)
+- Hepatitis C: HCV-RNA; confirmed Antibody (HEPC)
+- Prescription Medications (RXQ_RX)
+
+# Data Merging and Processing
+
+```{r download, cache = TRUE}
+# Maps years to letter codes
+code_map <- setNames(LETTERS, seq(1999, 2050, 2))
+# Converts vector of years into paired cycles
+cycle_years <- paste(cycle_years_input[c(T,F)],
+                     cycle_years_input[c(F,T)],
+                     sep="-") %>%
+  setNames(code_map[as.character(cycle_years_input)[c(T,F)]])
+# Add letter codes to data file names
+data_file_list <- sapply(names(keep_var), function(x)
+  sprintf("%s_%s", x, names(cycle_years))) %>% as.vector
+# Replace variables from `to_rm` with those from `to_add`
+for(i in 1:length(to_rm)) {
+  data_file_list[data_file_list == to_rm[i]] <- to_add[i]
+}
+# to get 1999-2000 data
+data_file_list <- gsub("_A", "", data_file_list)
+
+# Download and merge NHANES data using `RNHANES` package
+raw_data <- nhanes_load_data(data_file_list, year = cycle_years,
+                             destination = "nhanes_data", cache = TRUE,
+                             demographics = FALSE, recode_data = FALSE)
+# Correction for serum creatinine in 2005-2006 as per BIOPRO_D analytic notes
+# https://wwwn.cdc.gov/Nchs/Nhanes/2005-2006/BIOPRO_D.htm
+raw_data$BIOPRO_D$LBXSCR <- 0.978 * raw_data$BIOPRO_D$LBXSCR - 0.016
+
+# correction for serum creatinine in 1999-2001
+# https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB18.htm#LBXSCR
+raw_data$LAB18$LBXSCR <- 1.013 * raw_data$LAB18$LBXSCR + 0.147
+```
+
+```{r join_data_tables, cache = TRUE}
+# Kept variables and their descriptions
+joined_data <- list()
+# Loop through all years and all variables
+for (y in 1:length(cycle_years)) {
+  for (var in names(keep_var)) {
+    letter <- names(cycle_years)[y]
+    print(paste("LETTER:", letter))
+    var_names <- c("SEQN", keep_var[[var]])
+    varletter <- sprintf("%s_%s", var, letter)
+    # If in the `to_rm` list, replace with its `to_add` counterpart
+    if (varletter %in% to_rm) {
+      new_var <- unlist(to_add[which(to_rm == varletter)] %>% 
+        strsplit("_"))[1] # Counterpart in to_add
+      if (new_var == "DEMO") { # Indicator that this is a direct removal
+        letter <- names(cycle_years)[y-1] # Go to previous letter
+      } else {
+        var <- new_var 
+      }
+    }
+    # only for 2001-2002
+    if (letter == "B") {
+      file_name <- sprintf("%s_%s", var, letter)
+    } else {
+      file_name <- var
+    }
+    # Collect individual data file from combined file
+    df <- raw_data[[file_name]]
+    # Fix column name anomalies in earlier years (esp. 2001-2004)
+    if ("LBDSCR" %in% colnames(df)) {
+      df <- df %>% mutate(LBXSCR = LBDSCR) %>% mutate(LBXSCRSI = LBDSCRSI)
+    }
+    if ("SMQ680" %in% colnames(df)) {
+      df <- df %>% mutate(SMDANY = SMQ680) 
+    }
+    if ("LBDHCV" %in% colnames(df)) {
+      df <- df %>% mutate(LBDHCI = LBDHCV) 
+    }
+    # Define columns for the missing variables and fill them with NA
+    var_absent <- setdiff(var_names, colnames(df))
+    df[, var_absent] <- NA
+    df <- df %>% 
+      select(all_of(var_names)) %>% 
+      mutate(SEQN = as.character(SEQN))
+    # Nest all variables that generate extra rows
+    if (var == "RXQ_RX") {
+      df <- df %>% chop(rx_multiples[rx_multiples %in% keep_var$RXQ_RX])
+    }
+    if (any(table(df$SEQN) != 1))
+      stop("Multiple lines per respondent")
+    # If it's DEMO, save to joined_data. 
+    # Otherwise, left-join with the previous/existing table
+    if (var != names(keep_var)[1]) {
+      # Ensure SEQN is present in both data frames before merging
+      if ("SEQN" %in% colnames(joined_data[[cycle_years[y]]]) && "SEQN" %in% colnames(df)) {
+        # Debugging print statements
+        print(paste("Merging data for cycle:", cycle_years[y]))
+        print(paste("Columns in df:", paste(colnames(df), collapse=", ")))
+        print(paste("Columns in joined_data:", paste(colnames(joined_data[[cycle_years[y]]]), collapse=", ")))
+        
+        df <- joined_data[[cycle_years[y]]] %>% 
+          merge(df, by="SEQN", all.x = TRUE) %>% 
+          mutate_all(as.character)
+      } else {
+        print(paste("SEQN not found in one of the data frames for cycle:", cycle_years[y]))
+      }
+    }
+    
+    joined_data[[cycle_years[y]]] <- df
+  }
+}
+
+# Check that all columns line up with each other before rbind
+cols_match <- sapply(joined_data, function(x) {
+  all(colnames(x) == c("SEQN", unlist(keep_var)))
+})
+```
+
+```{r bind_data_tables, cache = TRUE}
+# 2017-2018 United States population (320,842,721)
+us_pop_2018 <- joined_data$`2017-2018` %>% 
+  select(WTINT2YR) %>% unlist %>% as.numeric %>% sum
+# 2017-2018 U.S. Black population (38,925,825)
+black_pop_2018 <- 38925825
+
+if (all(cols_match)) {
+  all_data <- lapply(joined_data, function(dat) {
+    # Process age, gender, and race variables for stratified reweighting
+    dat <- dat %>% 
+      mutate(MISSING = is.na(LBXSCR)) %>%
+      mutate(WTINT2YR = as.numeric(WTINT2YR)) %>%
+      mutate(WTMEC2YR = as.numeric(replace(WTMEC2YR, WTMEC2YR=="Not MEC Examined", 0))) %>%
+      mutate(WTSCR2YR = WTMEC2YR) %>% # SCr subset weights to modify
+      mutate(IS_FEMALE = RIAGENDR == "Female") %>% 
+      mutate(IS_BLACK = RIDRETH1 == "Non-Hispanic Black") %>% 
+      mutate(RIDAGEYR = replace(RIDAGEYR, nchar(RIDAGEYR) > 2, "90")) %>% 
+      mutate(cdc_age = cut(as.numeric(RIDAGEYR), right = FALSE, 
+                            breaks = cdc_breaks, labels = cdc_labels)) %>%
+      mutate(census_age = cut(as.numeric(RIDAGEYR), right = FALSE, 
+                               breaks = census_breaks, labels = census_labels))
+    # Compute joint distribution of missing, age, gender, and race 
+    weights <- dat %>% 
+      group_by(MISSING, IS_BLACK, IS_FEMALE, cdc_age) %>%
+      summarize(W = sum(WTMEC2YR), .groups = "drop") %>% as.data.frame()
+    # Compute table for scaling all non-missing weights by sum(weights)/sum(non-missing weights)
+    scaling_table <- weights[!weights$MISSING, -1]
+    total_weights <- weights[!weights$MISSING, "W"] + weights[weights$MISSING, "W"]
+    scaling_table$W <- total_weights/weights[!weights$MISSING, "W"]
+    # Run through all combinations of age/gender/race for scaling
+    for (i in 1:nrow(scaling_table)) {
+        row <- scaling_table[i,]
+        to_change <- dat$IS_BLACK == unlist(row["IS_BLACK"]) &
+            dat$IS_FEMALE == unlist(row["IS_FEMALE"]) &
+            dat$cdc_age == unlist(row["cdc_age"])
+        dat[to_change, "WTSCR2YR"] <- dat[to_change, "WTSCR2YR"] * as.numeric(row["W"])
+    }
+    # Scale weights to 2017-2018 CPS total population
+    dat$WTSCR2YR = dat$WTSCR2YR * us_pop_2018 / sum(dat$WTSCR2YR[!dat$MISSING])
+    # Scale Black weights to 2017-2018 CPS Black population
+    nm_black <- dat$IS_BLACK & !dat$MISSING
+    nm_nonblack <- !dat$IS_BLACK & !dat$MISSING
+    obs_black_pop <- dat$WTSCR2YR[nm_black] %>% sum
+    dat$WTSCR2YR[nm_black] <- dat$WTSCR2YR[nm_black] * black_pop_2018/obs_black_pop
+    # Scale other weights to 2017-2018 CPS total population
+    obs_total_pop <- dat$WTSCR2YR[!dat$MISSING] %>% as.numeric %>% sum
+    dat$WTSCR2YR[nm_nonblack] <- dat$WTSCR2YR[nm_nonblack] * 
+                              (us_pop_2018 - black_pop_2018) / 
+                              (obs_total_pop - black_pop_2018)
+    dat$WTSCR18YR = dat$WTSCR2YR / (length(cycle_years_input)/2)
+    return(dat)
+  }) %>% bind_rows(.id = "Cycle_Year")
+  # Validation of population sizes
+  # lapply(all_data, function(df) {
+  #   c(sum(df$WTSCR2YR[!df$MISSING]),
+  #     sum(df$WTSCR2YR[df$RIDRETH1=="Non-Hispanic Black" & !df$MISSING]))
+  # })
+} else {
+  stop("Column names do not match")
+}
+```
+
+Merged data files from `r range(cycle_years_input) %>% paste(collapse="-")`: `r nrow(all_data)` adult respondents $\times$ `r ncol(all_data)` variables
+
+```{r recast_and_filter, cache = TRUE}
+# Remove top-capped age categories and <18
+# ("80 years of age and over", ">= 80 years of age",">= 85 years of age")
+filter_age <- function(dat) {
+  dat %>% 
+    filter(nchar(RIDAGEYR) <= 2) %>% # Exact ages only
+    mutate(RIDAGEYR = as.integer(RIDAGEYR)) %>% # Convert to numeric
+    filter(RIDAGEYR >= 18) %>% # Adults only
+    filter(RIDAGEYR < 85) %>% # Filters out false "90"s from earlier that were used for age reweighting
+      return()
+}
+
+# Tracking number of removed subjects by category
+removed <- c(nrow(all_data), 
+  nrow(all_data %>% filter(!MISSING)),
+  nrow(all_data %>% filter(!MISSING) %>% filter_age), 
+  nrow(all_data %>% filter(!MISSING) %>% 
+         filter_age %>% filter(!grepl("Yes", na_to_No(RIDEXPRG)))) 
+  ) %>% diff %>% abs %>% setNames(c("Missing","Age","Pregnant"))
+# Tracking percentage removal by category
+rm_percent <- format_1(100 * removed / nrow(all_data)) %>% trimws
+
+
+dat_minus_age <- all_data %>% filter_age
+
+# Remove extra columns and rows with missing SCr/age/gender/race
+dat_minus_missing <- dat_minus_age %>% filter(!is.na(LBXSCR))
+
+
+add_demo_info <- function(dat) {
+  dat$URXUMA <- replace(dat$URXUMA, 
+    dat$URXUMA %in% c("Below Limit of Detection", 
+                      "At or below detection limit fill value"), NA)
+  # Convert numeric cols to numeric type
+  for (col in num_cols) {
+    if (col %in% colnames(dat))
+      dat[,col] <- as.numeric(dat[,col])
+  }
+  # Remove uncertain Black/Non-Black subjects
+  # Convert age to numeric; set combined weights
+  # Set IS_FEMALE from gender; set IS_BLACK from race
+  dat <- dat %>%
+    mutate(SMOKING = na_to_No(SMDANY)=="Yes") %>% 
+    mutate(RXDCOUNT = RXDCOUNT %>% na_to_F(alt=0) %>% as.integer) %>%
+    mutate(albuminuria = 100*URXUMA/URXUCR > alb_cr_ratio_threshold) %>%
+    mutate(albuminuria = albuminuria %>% na_to_F) %>% 
+    mutate(medicare = RIDAGEYR >= 65 | 
+                      na_to_No(HIQ031B) == "Yes" | 
+                      na_to_No(HIQ260) == "Yes")
+  # Set pregnancy status
+  dat <- dat %>% 
+    filter(!grepl("Yes", na_to_No(RIDEXPRG))) #Pregnant
+  return(dat)
+}
+dat <- add_demo_info(dat_minus_missing)
+
+# Proportion of patients seen by a single academic medical center 
+# https://www.uwmedicine.org/sites/stevie/files/2018-11/UW-Medicine-Fact-Book.pdf
+#amc_frac <- 1600000/us_pop_2018
+black_adult_pop <- dat %>% 
+  filter(RIDRETH1 == "Non-Hispanic Black") %>%
+  select(WTSCR18YR) %>% unlist %>% as.numeric %>% sum
+black_adult_pop_recent <- dat %>% 
+  filter(RIDRETH1 == "Non-Hispanic Black") %>%
+  filter(Cycle_Year == "2017-2018") %>%
+  select(WTSCR2YR) %>% unlist %>% as.numeric %>% sum
+amc_frac <- 100000/black_adult_pop
+amc_frac_recent <- 100000/black_adult_pop_recent
+```
+
+- Subjects removed due to missingness (serum creatinine): `r removed["Missing"]` (`r rm_percent["Missing"]`%)
+- Subjects removed due to $\text{age} < 18$ or censoring: `r removed["Age"]` (`r rm_percent["Age"]`%)
+- Subjects removed due to pregnancy: `r removed["Pregnant"]` (`r rm_percent["Pregnant"]`%)
+- Stratified reweighting: weights from subjects with missing serum creatinine were distributed evenly among non-missing subjects of the same race, gender, and age bin (18-44, 45-64, 65-74, 75+)
+
+Final sample of non-pregnant Black adult Americans with serum creatinine values:  
+
+- `r nrow(dat)` subjects in NHANES representing `r round(black_adult_pop/1000000,2)` million persons nationally
+
+```{r gfr_ckd_columns, cache = TRUE}
+eGFR_labels <- c("<15 (Kidney Failure)", "15-29 (Severe Decrease)", 
+                 "30-44 (Moderate-Severe Decrease)","45-59 (Mild-Moderate Decrease)",
+                 "60-89 (Mild Decrease)","90+ (Normal/High)")
+ckd_map <- c("G5","G4","G3b","G3a","G2","G1")
+normal_int <- which(ckd_map == "Normal")
+# Compute eGFR with and without race 
+add_eGFR_info <- function(dat) {
+  dat <- dat %>%
+    mutate(eGFR = get_eGFR(SCr = LBXSCR, age = RIDAGEYR, 
+      female = IS_FEMALE, black = IS_BLACK)) %>% 
+    mutate(eGFR_no_race = get_eGFR(SCr = LBXSCR, age = RIDAGEYR, 
+      female = IS_FEMALE, black = FALSE)) %>%
+    mutate(eGFR_diff = eGFR_no_race - eGFR)
+  
+  # Denormalized columns by body surface area
+  dat <- dat %>% 
+    mutate(BSA = 0.007184 * BMXWT^0.425 * BMXHT^0.725) 
+  
+  # Compute CKI-EPI difference from removing Race Coefficient
+  quantile_map <- (1:nrow(dat)/nrow(dat)) %>% setNames(sort(dat$eGFR))
+  dat$eGFR_quantile <- quantile_map[as.character(dat$eGFR)]
+  
+  # Compute eGFR categories 
+  eGFR_breaks <- c(0, 15, 30, 45, 60, 90, max(dat$eGFR, na.rm = T) + 100)
+  ckd_change <- function(df, entry) {
+    return(df$eGFR_category_no_race == entry & 
+           df$eGFR_category != entry)
+  }
+  
+  # eGFR category: 6 binned goups
+  # g1_g2: whether in the two healthiest groups
+  # albuminuria: whether ALB/CR ratio is over threshold (>30)
+  # CKD stage: eGFR category with albuminuria requried for G1/G2
+  # HAS_CKD: G2 or more severe
+  dat <- dat %>% 
+    mutate(eGFR_category = cut(eGFR, right = FALSE, 
+      breaks=eGFR_breaks, labels=eGFR_labels)) %>% 
+    mutate(eGFR_category_no_race = cut(eGFR_no_race, right = FALSE, 
+      breaks=eGFR_breaks, labels=eGFR_labels)) %>% 
+    mutate(g1_g2 = eGFR_category %in% c("60-89 (Mild Decrease)","90+ (Normal/High)")) %>% 
+    mutate(g1_g2_no_race = eGFR_category_no_race %in% c("60-89 (Mild Decrease)","90+ (Normal/High)")) 
+  
+  # Compute CKD stage, CKD status, and changes in CKD stage +/- race
+  dat <- dat %>%
+    mutate(CKD_stage = eGFR_category %>% factor(labels=ckd_map)) %>% 
+    mutate(CKD_stage_no_race = eGFR_category_no_race %>% factor(labels=ckd_map)) 
+  dat <- dat %>% 
+    mutate(CKD_stage = CKD_stage %>% 
+             factor(levels = c(levels(CKD_stage),"Normal"))) %>%
+    mutate(CKD_stage_no_race = CKD_stage_no_race %>% 
+             factor(levels = c(levels(CKD_stage_no_race),"Normal")))
+  dat$CKD_stage[dat$g1_g2] <- dat$CKD_stage[dat$g1_g2] %>% 
+    replace(!dat$albuminuria[dat$g1_g2], 
+            "Normal")
+  dat$CKD_stage_no_race[dat$g1_g2_no_race] <- dat$CKD_stage_no_race[dat$g1_g2_no_race] %>% 
+    replace(!dat$albuminuria[dat$g1_g2_no_race], 
+            "Normal")
+  dat <- dat %>% 
+    mutate(HAS_CKD = CKD_stage != "Normal") %>%
+    mutate(HAS_CKD_no_race = CKD_stage_no_race != "Normal") %>% 
+    mutate(CKD_change = rep("No Change", nrow(dat)))
+  
+  # CKD_change: records G[X] for any change in CKD status
+  for (g_stage in ckd_map) {
+    dat <- dat %>% 
+      mutate(CKD_change = replace(CKD_change,
+        CKD_stage_no_race == g_stage & CKD_stage != g_stage, 
+        g_stage)
+      )
+  }
+  
+  # Change `CKD_change` from indicating final stage to type of reclassification
+  dat <- dat %>% 
+    mutate(CKD_reclass = CKD_change) %>%
+    mutate(CKD_reclass = replace(CKD_reclass, 
+                                 CKD_reclass %in% ckd_map, 
+                                 "Reclassified CKD Stage")) %>%
+    mutate(CKD_reclass = replace(CKD_reclass, 
+      !HAS_CKD & HAS_CKD_no_race, "Reclassified CKD Status")) %>%
+    mutate(CKD_reclass = replace(CKD_reclass, 
+                                 CKD_stage_no_race=="Normal", 
+                                 "Normal"))
+  return(dat)
+}
+
+dat <- add_eGFR_info(dat)
+```
+
+
+```{r cancer_columns, cache = TRUE}
+aggregate_cols <- function(row, max_char, fxn) {
+  row <- row[!is.na(row)]
+  row <- as.numeric(row[nchar(row) <= max_char])
+  return(ifelse(length(row) > 0, fxn(row), NA))
+}
+
+add_cancer_info <- function(dat, eGFR = TRUE) {
+  
+# Combine years since diagnosis across all cancer types
+  dat$cancer_age <- dat[, cancer_age_cols] %>% 
+    apply(1, aggregate_cols, max_char=2, fxn=min)
+  dat[, cancer_age_cols] <- NULL
+  
+  # Compute cancer and carboplatin relevant features
+  dat <- dat %>% 
+    mutate(HAS_CANCER = na_to_No(MCQ220) == "Yes") %>% 
+    mutate(years_since_diagnosis = RIDAGEYR - cancer_age) %>%
+    mutate(HAS_RECENT_CANCER = na_to_F(years_since_diagnosis <= diagnosis_threshold))
+  if (eGFR) {
+    dat <- dat %>%
+      mutate(capped_eGFR = get_eGFR(SCr = LBXSCR, age = RIDAGEYR, 
+        female = IS_FEMALE, black = IS_BLACK, capped = TRUE)) %>% 
+      mutate(capped_eGFR_no_race = get_eGFR(SCr = LBXSCR, age = RIDAGEYR, 
+        female = IS_FEMALE, black = FALSE, capped = TRUE)) 
+    dat <- dat %>%
+      mutate(capped_eGFR_denorm = pmin(125, ifelse(is.na(BSA), 
+        capped_eGFR, capped_eGFR * BSA / 1.73))) %>%
+      mutate(capped_eGFR_denorm_no_race = pmin(125, ifelse(is.na(BSA), 
+        capped_eGFR_no_race, capped_eGFR_no_race * BSA / 1.73)) )
+    dat <- dat %>%
+      mutate(carboplatin = mid_AUC*capped_eGFR_denorm + 25) %>% 
+      mutate(carboplatin_no_race = mid_AUC*capped_eGFR_denorm_no_race + 25) %>% 
+      mutate(carboplatin_diff = carboplatin_no_race/carboplatin)
+  }
+  # Find cases of ovarian cancer 
+  dat <- dat %>% 
+    mutate(HAS_OVARIAN = (na_to_No(MCQ230A) == "Ovary (ovarian)") | 
+                         (na_to_No(MCQ230B) == "Ovary (ovarian)") | 
+                         (na_to_No(MCQ230C) == "Ovary (ovarian)") | 
+                         (na_to_No(MCQ230D) == "Ovary (ovarian)"))
+  return(dat)
+}
+
+dat <- add_cancer_info(dat)
+```
+
+```{r bp_columns, cache = TRUE}
+add_bp_info <- function(dat) {
+  # Blood pressure aggregation across 3 readings
+  dat <- dat %>% 
+    mutate(BPXSY = dat %>% select(contains("BPXSY")) %>% 
+           apply(1, aggregate_cols, max_char=3, fxn=median)) %>% 
+    mutate(BPXDI = dat %>% select(contains("BPXDI")) %>% 
+           apply(1, aggregate_cols, max_char=3, fxn=median)) 
+  
+  # Set HTN status (M_HTN = measured; HAS_HTN = also includes self-report of meds)
+  dat <- dat %>% 
+    mutate(M_HTN = na_to_F(BPXSY, alt=0) > 130 | 
+                   na_to_F(BPXDI, alt=0) > 80) %>%
+    mutate(HAS_HTN = M_HTN | 
+                     na_to_No(BPQ030) == "Yes" | 
+                     na_to_No(BPQ040A) == "Yes") # self-report taking HTN medication
+    #mutate(HAS_HTN = replace(HAS_HTN, is.na(BPXSY) & is.na(BPXDI), NA)) %>% # !htn_therapy
+  dat <- dat %>% 
+    mutate(U_HTN = na_to_F(BPXSY, alt=0) > 140 | 
+                   na_to_F(BPXDI, alt=0) > 90)
+  
+  return(dat)
+}
+
+dat <- add_bp_info(dat)
+```
+
+```{r medical_condition_columns}
+add_med_info <- function(dat, eGFR = TRUE) {
+  # Set Smoking, HIV, HCV, and HBV
+  dat <- dat %>% 
+    mutate(HIV = na_to_F(LBDHI == "Positive") |
+                 na_to_F(LBXHIVC == "HIV-1/2 Reactive") |
+                 na_to_F(LBXHIV1 == "Reactive") |
+                 na_to_F(LBXHIV2 == "Reactive") |
+                 na_to_F(LBXHNAT == "Reactive for HIV-1")
+    ) %>% 
+    mutate(HCV = na_to_F(LBXHCR == "Positive")) %>% 
+    mutate(HBV = na_to_F(LBDHBG == "Positive"))
+    
+  # Set self-reported cancer, gout, CAD, CVD, and diabetes
+  dat <- dat %>% 
+    mutate(HAS_CANCER = na_to_No(MCQ220) == "Yes") %>% 
+    mutate(years_since_diagnosis = RIDAGEYR - cancer_age) %>%
+    mutate(HAS_RECENT_CANCER = na_to_F(years_since_diagnosis <= diagnosis_threshold)) 
+  dat <- dat %>% 
+    mutate(HAS_GOUT = na_to_No(MCQ160N)=="Yes") %>% 
+    mutate(gout_age = as.numeric(na_to_F(replace(MCD180N, MCD180N=="Don't know", NA), alt=-99))) %>%
+    mutate(RECENT_GOUT = HAS_GOUT & gout_age <= diagnosis_threshold)
+  dat <- dat %>% #cvd_therapy
+    mutate(HAS_CAD = na_to_No(MCQ160C) == "Yes" | # coronary heart disease
+           na_to_No(MCQ160D) == "Yes" | # angina
+           na_to_No(MCQ160E) == "Yes") %>% # heart attack
+    mutate(HAS_HF = na_to_No(MCQ160B) == "Yes") %>% # # congestive heart failure
+    mutate(HAS_CVD = HAS_HF | HAS_CAD | 
+           na_to_No(MCQ160F) == "Yes") # stroke
+  
+  # Set binary variables for different indications
+  dat <- dat %>%
+    mutate(HAS_DIABETES = na_to_No(DIQ010) == "Yes" |  # self-reported clinician-diagnosis
+                      na_to_No(DID070) == "Yes" |   # self-reported oral hypoglycemic agents
+                      na_to_No(DIQ050) == "Yes" |   # self-reported insulin
+                      na_to_F(LBXGH >= 6.5) |       # HbA1c > 6.5%
+                      na_to_F(LBXGLU >= 126))       # fasting glucose >= 126
+  dat <- dat %>%
+    mutate(PREDIABETES = na_to_No(DIQ160) == "Yes") %>% 
+    mutate(KSTONES = na_to_No(KIQ026) == "Yes") %>% 
+    mutate(FAM_DIABETES = na_to_No(DIQ175A) == "Family history")
+  if (eGFR) {
+    dat <- dat %>% 
+      mutate(IND_ACEi = HAS_HTN | HAS_CAD |    # hypertension, MI, angina, CHD
+             na_to_No(MCQ160B) == "Yes" |     # congestive HF
+             (HAS_CKD & HAS_DIABETES))        # diabetic kidney disease
+  }
+  dat <- dat %>% 
+    mutate(HAS_HD = HAS_CAD |   # MI, angina, CHD
+           na_to_No(MCQ160B) == "Yes")   # congestive HF
+  dat <- dat %>% 
+    mutate(DONOR_CANDIDATE = !HIV & !HBV & !HCV & !HAS_DIABETES & !U_HTN &
+                             !na_to_F(BMXBMI > 35) & !HAS_RECENT_CANCER) #%>% 
+    # mutate(DONOR_CANDIDATE = DONOR_CANDIDATE & (
+    #   (PREDIABETES | FAM_DIABETES) + M_HTN + HAS_CVD + SMOKING +
+    #   HAS_CANCER + HAS_GOUT + KSTONES + albuminuria) <= 1
+    # )
+  return(dat)
+}
+
+dat <- add_med_info(dat)
+```
+
+```{r clinical_trial_columns, cache = TRUE}
+#https://ctep.cancer.gov/protocolDevelopment/docs/NCI_ASCO_Friends_Eligibility_Criteria.pdf
+#https://jamanetwork.com/journals/jama/fullarticle/2685143
+add_gfr_cut <- function(df, name, breaks, labels) {
+  breaks <- c(0, breaks, max(df$eGFR, na.rm = TRUE) + 100)
+  df[, name] <- cut(df$eGFR, breaks=breaks, labels=labels)
+  df[, sprintf("%s_no_race", name)] <- cut(df$eGFR_no_race, breaks=breaks, labels=labels)
+  return(df)
+}
+
+add_tbl_info <- function(dat) {
+  # Set columns for evaluated clinical decisions in Tables 2 and 3
+  exclusion_labels <- c("None", "NCTN only", "ETCTN and NCTN")
+  dat <- add_gfr_cut(dat, "exclusion", breaks=c(50,60), labels = exclusion_labels)
+  
+  donation_labels <- c("Not acceptable", "May not be acceptable", "Acceptable")
+  dat <- add_gfr_cut(dat, "donation", breaks=c(60,90), labels = donation_labels)
+  
+  transplant_labels <- c("Eligible", "Not Eligible")
+  dat <- add_gfr_cut(dat, "transplant", breaks=c(20), labels = transplant_labels)
+  
+  referral_labels <- c("Recommended", "Not Recommended")
+  dat <- add_gfr_cut(dat, "referral", breaks=c(30), labels = referral_labels)
+  
+  mnt_labels <- c("No", "Yes", "No")
+  dat <- add_gfr_cut(dat, "mnt", breaks=c(13, 50), labels = mnt_labels)
+  
+  kde_labels <- c("No", "Yes", "No")
+  dat <- add_gfr_cut(dat, "kde", breaks=c(15, 29), labels = kde_labels)
+  
+  fistula_labels <- c("Yes", "No")
+  dat <- add_gfr_cut(dat, "fistula", breaks=c(18), labels = fistula_labels)
+  
+  nsaid_labels <- c("Contraindicated", "Normal")
+  dat <- add_gfr_cut(dat, "nsaids", breaks=c(30), labels = nsaid_labels)
+  
+  LMWH_labels <- c("MDR", "Normal")
+  dat <- add_gfr_cut(dat, "LMWH", breaks=c(30), labels = LMWH_labels)
+  
+  warfarin_labels <- c("DR", "Normal")
+  dat <- add_gfr_cut(dat, "warfarin", breaks=c(30), labels = warfarin_labels)
+  
+  opioid_labels <- c("DR", "Normal")
+  dat <- add_gfr_cut(dat, "opioid", breaks=c(60), labels = opioid_labels)
+  
+  mtx_labels <- c("Contraindicated", "MDR", "Normal")
+  dat <- add_gfr_cut(dat, "mtx", breaks=c(15, 60), labels = mtx_labels)
+  
+  cisplatin_labels <- c("Contraindicated", "Normal")
+  dat <- add_gfr_cut(dat, "cisplatin", breaks=c(30), labels = cisplatin_labels)
+  
+  melphalan_labels <- c("DR", "Normal")
+  dat <- add_gfr_cut(dat, "melphalan", breaks=c(60), labels = melphalan_labels)
+  
+  metformin_labels <- c("Contraindicated", "MDR", "Normal")
+  dat <- add_gfr_cut(dat, "metformin", breaks=c(30, 45), labels = metformin_labels)
+  
+  SGLT2_labels <- c("Contraindicated", "Normal")
+  dat <- add_gfr_cut(dat, "SGLT2", breaks=c(30), labels = SGLT2_labels)
+  
+  bb_labels <- c("MDR", "Normal")
+  dat <- add_gfr_cut(dat, "betablockers", breaks=c(30), labels = bb_labels)
+  
+  ACEi_labels <- c("DR", "Normal")
+  dat <- add_gfr_cut(dat, "ACEinhibitors", breaks=c(45), labels = ACEi_labels)
+  
+  return(dat)
+}
+
+dat <- add_tbl_info(dat)
+```
+
+```{r black_subject_filtering, cache = TRUE}
+# Establish survey design object
+des <- svydesign(id = ~SDMVPSU, 
+                 strata = ~SDMVSTRA, 
+                 weights = ~WTSCR18YR, 
+                 nest = TRUE, data = dat)
+dat$no_weight <- 1
+des_unweighted <- svydesign(id = ~SDMVPSU, 
+                            strata = ~SDMVSTRA, 
+                            weights = ~no_weight, 
+                            nest = TRUE, data = dat)
+#des_rep <- as.svrepdesign(des, type = "JKn")
+
+dat_black <- dat %>% filter(IS_BLACK)
+des_black <- des[dat$IS_BLACK, ]
+des_black_unweighted <- des_unweighted[dat$IS_BLACK, ]
+
+
+des_recent <- des[dat$Cycle_Year=="2017-2018",]
+dat_black_recent <- dat_black[dat_black$Cycle_Year=="2017-2018",]
+des_black_recent <- des_black[dat_black$Cycle_Year=="2017-2018",]
+
+# Convert wide to long data format 
+# with coefficient-based substitutions
+dat_black_stacked <- rbind(
+  dat_black %>% data.frame(Model = "Yes"),
+  dat_black %>% mutate(
+    eGFR = eGFR_no_race,
+    eGFR_category = eGFR_category_no_race,
+    HAS_CKD = HAS_CKD_no_race,
+    CKD_stage = CKD_stage_no_race,
+    carboplatin = carboplatin_no_race,
+    exclusion = exclusion_no_race,
+    donation = donation_no_race,
+    transplant = transplant_no_race,
+    referral = referral_no_race,
+    mnt = mnt_no_race,
+    kde = kde_no_race,
+    fistula = fistula_no_race,
+    nsaids = nsaids_no_race, 
+    opioid = opioid_no_race, 
+    warfarin = warfarin_no_race,
+    LMWH = LMWH_no_race,
+    cisplatin = cisplatin_no_race, 
+    mtx = mtx_no_race, 
+    melphalan = melphalan_no_race,
+    SGLT2 = SGLT2_no_race,
+    metformin = metformin_no_race, 
+    betablockers = betablockers_no_race,
+    ACEinhibitors = ACEinhibitors_no_race
+  ) %>% data.frame(Model = "No")
+) %>% select(-contains("no_race")) %>%
+  mutate(Model = factor(Model, levels = c("Yes","No")))
+
+# Set CKD from normal CKD-EPI for computing consistent subsets
+dat_black_stacked$HAS_CKD_prev <- c(dat_black$HAS_CKD, dat_black$HAS_CKD)
+```
+
+\newpage
+# Subject Demographics 
+
+```{r process_missing}
+summarize_all <- function(df, weight) {
+  weight <- df[,weight]
+  df %>% 
+    summarize(
+    "NHANES Survey (2017-2018)—no." = sum(Cycle_Year == "2017-2018") %>% comma,
+    "NHANES Survey (2001-2018)—no." = n() %>% comma,
+    "United States Population—no." = round(sum(weight)) %>% comma,
+    "Female—%" = rw_percent(IS_FEMALE, weight) %>% format_1,
+    "Median Age" = rw_median(RIDAGEYR, weight),
+    "IQR Age" = rw_IQR(RIDAGEYR, weight),
+    "Obesity—%" = rw_percent(BMXBMI > 30, weight) %>% format_1,
+    "Median BMI" = rw_median(BMXBMI, weight),
+    "IQR BMI" = rw_IQR(BMXBMI, weight),
+    "All Heart Disease—%" = rw_percent(HAS_CVD, weight) %>% format_1,
+    "Coronary Heart Disease—%" = rw_percent(HAS_CAD, weight) %>% format_1,
+    "Hypertension—%" = rw_percent(HAS_HTN, weight) %>% format_1,
+    "Median SBP" = rw_median(BPXSY, weight),
+    "IQR SBP" = rw_IQR(BPXSY, weight),
+    "Median DBP" = rw_median(BPXDI, weight),
+    "IQR DBP" = rw_IQR(BPXDI, weight),
+    "Prediabetes—%" = rw_percentyes(DIQ160, weight) %>% format_1,
+    "Diabetes—%" = rw_percentyes(DIQ010, weight) %>% format_1,
+    "Taking Insulin—%" = rw_percentyes(DIQ050, weight) %>% format_1,
+    "Median HbA1c" = rw_median(LBXGH, weight),
+    "IQR HbA1c" = rw_IQR(LBXGH, weight),
+    "Using Rx Drug—%" = rw_percentyes(RXDUSE, weight) %>% format_1,
+    "Median Rx Drug Count" = rw_median(RXDCOUNT, weight),
+    "IQR Rx Drug Count" = rw_IQR(RXDCOUNT, weight),
+    .groups = "drop"
+  ) %>%
+  mutate(`Median Age (IQR)—year` = sprintf("%s (%s)", 
+         `Median Age`, format_1(`IQR Age`) %>% trimws)) %>%
+  mutate(`Median BMI (IQR)—kg/m.sq` = sprintf("%s (%s)", 
+         `Median BMI`, format_1(`IQR BMI`) %>% trimws)) %>%
+  mutate(`Median SBP (IQR)—mmHg` = sprintf("%s (%s)", 
+         `Median SBP`, format_1(`IQR SBP`) %>% trimws)) %>%
+  mutate(`Median DBP (IQR)—mmHg` = sprintf("%s (%s)", 
+         `Median DBP`, format_1(`IQR DBP`) %>% trimws)) %>%
+  mutate(`Median HbA1c (IQR)—%` = sprintf("%s (%s)", 
+         `Median HbA1c`, format_1(`IQR HbA1c`) %>% trimws)) %>%
+  t %>% as.data.frame()
+}
+
+dat_missing <- dat_minus_age %>% 
+  filter(IS_BLACK) %>%
+  add_demo_info %>% add_cancer_info(eGFR = FALSE) %>% 
+  add_bp_info %>% add_med_info(eGFR = FALSE) %>% 
+  mutate(WTMEC2YR = replace(WTMEC2YR, WTMEC2YR == "Not MEC Examined", 0) %>% as.numeric) %>% 
+  mutate(WTMEC18YR = WTMEC2YR / (length(cycle_years_input)/2)) %>%
+  mutate(adj_WTMEC18YR = WTMEC18YR * black_adult_pop / sum(WTMEC18YR))
+
+by_missing <- data.frame(
+  Missing = summarize_all(dat_missing %>% filter(MISSING), weight = "adj_WTMEC18YR"), 
+  Present = summarize_all(dat_missing %>% filter(!MISSING), weight = "adj_WTMEC18YR"),
+  Total = summarize_all(dat_missing, weight = "adj_WTMEC18YR")
+)
+colnames(by_missing) <- c("Missing","Present","Total")
+
+by_race <- data.frame(
+  White = summarize_all(dat[dat$RIDRETH1 == "Non-Hispanic White",],
+                        weight = "WTSCR18YR"),
+  Hispanic = summarize_all(dat[dat$RIDRETH1 %in% c("Mexican American","Other Hispanic"),],
+                        weight = "WTSCR18YR"),
+  Black = summarize_all(dat[dat$RIDRETH1 == "Non-Hispanic Black",],
+                        weight = "WTSCR18YR"),
+  Other = summarize_all(dat[dat$RIDRETH1 == "Other Race - Including Multi-Racial",],
+                        weight = "WTSCR18YR"),
+  Total = summarize_all(dat, weight = "WTSCR18YR")
+)
+colnames(by_race) <- c("White","Hispanic","Black","Other","Total")
+by_rows <- c("NHANES Survey (2017-2018)—no.", 
+             "NHANES Survey (2001-2018)—no.",
+             "United States Population—no.",
+             "Median Age (IQR)—year","Female—%","All Heart Disease—%",
+             "Hypertension—%","Median SBP (IQR)—mmHg","Median DBP (IQR)—mmHg",
+             "Obesity—%","Median BMI (IQR)—kg/m.sq",
+             "Diabetes—%","Taking Insulin—%","Median HbA1c (IQR)—%")
+
+demo_latex <- function(df, caption) {
+  linesep <- rep("", nrow(df)-1)
+  caption_text = sprintf("Demographics, Laboratory Measurements, 
+                          and Medical Conditions by %s", caption[2])
+  if (use_captions) 
+    caption_text = sprintf("Table S-%s: %s", caption[1], caption_text) 
+  df %>%
+      kable("latex", align = c("r", rep("c", ncol(df)-1)), booktabs = T, 
+            caption = caption_text, linesep = linesep) %>% 
+      kable_styling(latex_options = c("hold_position")) %>% 
+    footnote(general = sprintf('The weights of the %s Black population in each survey cycle was scaled to be representative of the 2017-2018 CDC NHANES Black population.', ifelse(caption[1]==1, "total", "non-missing")),
+        general_title = "", 
+        threeparttable = TRUE) %>%
+    return()
+}
+```
+
+```{r missing_latex}
+by_missing$Variable <- rownames(by_missing)
+by_missing <- by_missing[by_rows, ] 
+rownames(by_missing) <- NULL
+by_missing <- by_missing %>% select(Variable, everything()) 
+missing_latex <- demo_latex(by_missing, caption = c(1, "Missingness"))
+save_table(by_missing, title = "eTable-1")
+save_latex(missing_latex, title = "eTable-1")
+missing_latex
+```
+
+```{r race_latex}
+by_race$Variable <- rownames(by_race)
+by_race <- by_race[by_rows, ]
+rownames(by_race) <- NULL
+by_race <- by_race %>% select(Variable, everything()) 
+demo_latex <- demo_latex(by_race, caption = c(2, "Race/Ethnicity"))
+save_table(by_race, title = "eTable-2")
+save_latex(demo_latex, title = "eTable-2")
+demo_latex
+```
+
+\newpage
+# Changes in eGFR 
+
+```{r Figure_1A, fig.height=3.5}
+# Change in eGFR after removing Race Coefficient (Black Adults)
+diff_hist <- function(df, title, weighted=TRUE) {
+  g <- ggplot(df, aes(weight = ifelse(rep(weighted, nrow(df)), WTSCR2YR, 1))) + 
+    geom_histogram(aes(x = eGFR_no_race-eGFR),
+                   fill = jama_blue, color = 'black', alpha = 0.5, bins = 20) + 
+    ggtitle(title) + 
+    xlab(expression("Change in eGFR (mL/min/1.73"~m^2~")")) + 
+    ylab("U.S. Black Adult Population") + 
+    labs(fill="eGFR Category") + 
+    scale_x_continuous(labels = scales::comma,
+                       expand = c(0, 0)) +
+    scale_y_continuous(labels = scales::comma, 
+                       expand = c(0, 0), 
+                       limits=c(0, ifelse(use_CKD_EPI, 4.3*10^6, 6.1*10^6))) + 
+    annotate(geom="label", x=ifelse(use_CKD_EPI, -25+1, -40+0.2), 
+             y=ifelse(use_CKD_EPI, 3.5*10^6, 5.2*10^6), 
+             label=sprintf("Median: %s\nIQR: %s", 
+                           rw_median(df$eGFR_diff, df$WTSCR2YR) %>% format_1, 
+                           rw_IQR(df$eGFR_diff, df$WTSCR2YR) %>% format_1), 
+             size = 4, hjust = 0) + 
+    theme_classic() +
+    theme(plot.title = element_text(face = "bold"),
+          panel.grid.major.y = element_line(size=0.1, color="black"))
+  return(g)
+}
+
+# caption_text <- "2017-2018 U.S. Black Adult Population"
+# if (use_captions) 
+#   caption_text = sprintf("Figure 1A: %s", caption_text) 
+caption_text <- "A"
+
+diff_hist(df=dat_black %>% 
+            filter(Cycle_Year == "2017-2018") %>% 
+            mutate(WTSCR2YR = WTSCR2YR * black_adult_pop / sum(WTSCR2YR)) %>%
+            filter(eGFR_diff != min(eGFR_diff)), 
+            title=caption_text, weighted=TRUE)
+```
+
+```{r eFigure_1}
+# Histogram of eGFR with and without Race Coefficient: NHANES uncorrected
+comparison_hist <- function(df, title, weighted=TRUE) {
+  labs <- c(Included = jama_blue, Removed = jama_red) 
+  g <- ggplot(df, aes(weight = ifelse(rep(weighted, nrow(df)), WTSCR2YR, 1))) + 
+    geom_density(aes(x = eGFR, fill = "Included"), alpha = 0.4, bw=5) +  
+    geom_density(aes(x = eGFR_no_race, fill = "Removed"), alpha = 0.4, bw=5) + 
+    ggtitle(title) + 
+    xlab(expression("eGFR (mL/min/1.73"~m^2~")")) + 
+    ylab("Density: U.S. Black Adult Population") + 
+    scale_x_continuous(labels = scales::comma,
+                       expand = c(0, 0), limits = c(-0.1, 201)) + 
+    scale_y_continuous(labels = scales::comma, 
+                       expand = c(0, 0), limits=c(0, 0.023)) + 
+    scale_fill_manual(name = "Race Coefficient: ",
+                      values=labs) +
+    theme_classic() + 
+    theme(legend.position="bottom", 
+          plot.title = element_text(face = "bold"),
+          panel.grid.major.y = element_line(size=0.1, color="black"))
+  return(g)
+}
+
+# caption_text <- "2017-2018 U.S. Black Adult Population"
+# if (use_captions) 
+#   caption_text = sprintf("Figure S-1A: %s", caption_text) 
+caption_text <- ""
+
+comparison_hist(dat_black %>% 
+                filter(eGFR < 200) %>% 
+                filter(Cycle_Year == "2017-2018") %>%
+                mutate(WTSCR2YR = WTSCR2YR * black_adult_pop / sum(WTSCR2YR)),
+                title=caption_text, weighted=TRUE)
+```
+
+```{r ckd_prevalence}
+# Relative weights for age-adjustment 
+age_weight <- c(70783,8001,18257,17722,19511,22180,22479,
+                19806,17224,13307,10654, 
+                9410,8726,7415,4900,4259) %>% 
+  setNames(c("0-17","18-19","20-24","25-29","30-34","35-39","40-44",
+             "45-49","50-54","55-59","60-64",
+             "65-69","70-74","75-79","80-84","85+"))
+age_weight <- age_weight / sum(age_weight)
+rel_weight <- age_weight[!(names(age_weight) %in% c("0-17","80-84","85+"))]
+rel_weight <- rel_weight / sum(rel_weight)
+
+# Compute CKD prevalence across all racial/ethnic groups
+ckd_frac_raw <- dat %>% 
+  filter(!is.na(RIDRETH1)) %>%
+  mutate(Race = gsub("Non-Hispanic ","", RIDRETH1)) %>%
+  mutate(Race = replace(Race, 
+    Race == "Other Race - Including Multi-Racial", "Other")) %>%
+  mutate(Race = replace(Race, 
+    Race %in% c("Other Hispanic","Mexican American"), "Hispanic")) 
+
+# Reshape and plot
+plot_ckd_across_race <- function(ckd_frac, type = "Crude") {
+  race_ord <- ckd_frac$Race[order(ckd_frac$CKD)]
+  race_ord <- race_ord[!(race_ord %in% c("Black","Total"))] %>% 
+    c("Black","Total")
+  ckd_frac_black <- ckd_frac[ckd_frac$Race=="Black",
+    "Race_Coefficient"] %>% setNames(NULL) %>% unlist
+  ckd_frac_total <- ckd_frac[ckd_frac$Race=="Total",
+    "Race_Coefficient"] %>% setNames(NULL) %>% unlist
+  ckd_frac[,"Race_Coefficient"] <- "Included"
+  ckd_frac <- rbind(ckd_frac, 
+        data.frame(Race = c("Black", "Total"), 
+                   CKD = c(ckd_frac_black, ckd_frac_total),  
+                   Race_Coefficient = c("Removed","Removed")))
+  ckd_frac$Race <- ckd_frac$Race %>% factor(levels = race_ord)
+  ckd_frac$Race_Coefficient <- ckd_frac$Race_Coefficient %>% 
+    factor(labels = c("Included","Removed"))
+  colnames(ckd_frac) <- c("Race","Proportion with CKD", "Race Coefficient")
+  
+  # caption_text <- sprintf("%s Prevalence of CKD (2017-2018)", type)
+  # if (use_captions) 
+  #   caption_text = sprintf("Figure %s: %s", 
+  #                          ifelse(type=="Crude", "S-1B", "1B"), 
+  #                          caption_text) 
+  caption_text <- "B"
+  
+  g <- ggplot(data=ckd_frac, 
+         aes(x=Race, y=`Proportion with CKD`, fill=`Race Coefficient`)) +
+    geom_bar(stat="identity", width=0.8,
+             position = position_dodge2(preserve = "single")) + 
+    theme_classic() +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), 
+                       expand = c(0, 0), limits = c(0, ifelse(use_CKD_EPI, 0.21, 0.26))) + 
+    scale_fill_manual(values=c(Included=jama_blue, Removed = jama_red)) + 
+    ggtitle(caption_text) + 
+    xlab("Race/Ethnicity") + 
+    ylab(sprintf("%s Prevalence of CKD", type)) + 
+    geom_text(aes(label=format_1(100*`Proportion with CKD`)), #%>% paste0("%")),
+              position=position_dodge(width=0.8), vjust=1.5, 
+              color = 'white', size = 3.3) + 
+    theme(plot.title = element_text(face = "bold"),
+          panel.grid.major.y = element_line(size=0.1, color="black"))
+  return(g)
+}
+```
+
+# CKD Prevalence by Race/Ethnicity 
+
+```{r ckd_crude_prevalence}
+# Plot CKD crude prevalence by race/ethnic group; separate columns for +/- race term
+
+des_ckd <- svydesign(id = ~SDMVPSU, 
+                     strata = ~SDMVSTRA, 
+                     weights = ~WTSCR2YR, 
+                     nest = TRUE, data = ckd_frac_raw)
+des_ckd_recent <- des_ckd[dat$Cycle_Year=="2017-2018",]
+
+ckd_frac <- svyby(formula = ~HAS_CKD,
+              by = ~Race, design = des_ckd_recent, 
+              FUN = svymean, na.rm = TRUE, 
+              vartype = "se") %>%
+  select(contains("TRUE")) %>% setNames(c("CKD","SE"))
+ckd_total <- svyby(formula = ~HAS_CKD,
+              by = ~I(1>0), design = des_ckd_recent, 
+              FUN = svymean, na.rm = TRUE, 
+              vartype = "se") %>%
+  select(contains("TRUE")) %>% setNames(c("CKD","SE"))
+ckd_frac_nr <- svyby(formula = ~HAS_CKD_no_race,
+              by = ~Race, design = des_ckd_recent, 
+              FUN = svymean, na.rm = TRUE, 
+              vartype = "se") %>%
+  select(contains("TRUE")) %>% setNames(c("CKD","SE"))
+ckd_total_nr <- svyby(formula = ~HAS_CKD_no_race,
+              by = ~I(1>0), design = des_ckd_recent, 
+              FUN = svymean, na.rm = TRUE, 
+              vartype = "se") %>%
+  select(contains("TRUE")) %>% setNames(c("CKD","SE"))
+
+ckd_frac_crude <- rbind(
+  data.frame(Race = rownames(ckd_frac), 
+             ckd_frac,
+             Coef = "Included") %>% 
+    setNames(c("Race", "CKD", "SE","Coef")),
+  data.frame(Race = "Total", 
+             CKD = ckd_total$CKD, 
+             SE = ckd_total$SE,
+             Coef = "Included"),
+  data.frame(Race = rownames(ckd_frac_nr), 
+             ckd_frac_nr,
+             Coef = "Removed") %>% 
+    setNames(c("Race", "CKD", "SE","Coef")), 
+  data.frame(Race = "Total", 
+             CKD = ckd_total_nr$CKD, 
+             SE = ckd_total_nr$SE,
+             Coef = "Removed")
+  )
+
+ckd_frac_crude <- ckd_frac_crude[!duplicated(ckd_frac_crude$CKD) |
+                                 !duplicated(ckd_frac_crude$SE),]
+colnames(ckd_frac_crude) <- c("Race", "Prevalence", 
+                              "SE","Race Coefficient")
+race_ord <- rownames(ckd_frac)[order(ckd_frac$CKD)]
+race_ord <- race_ord[!(race_ord %in% c("Black","Total"))] %>% 
+  c("Black","Total")
+ckd_frac_crude$Race <- ckd_frac_crude$Race %>% factor(levels = race_ord)
+```
+
+```{r Figure_1B}
+# caption_text <- sprintf("%s Prevalence of CKD (2017-2018)", type)
+# if (use_captions) 
+#   caption_text = sprintf("Figure %s: %s", 
+#                          ifelse(type=="Crude", "S-1B", "1B"), 
+#                          caption_text) 
+caption_text <- "B"
+
+g <- ggplot(data=ckd_frac_crude, 
+       aes(x=Race, y=Prevalence, fill=`Race Coefficient`)) +
+  geom_bar(stat="identity", width=0.8,
+           position = position_dodge2(preserve = "single")) + 
+  geom_errorbar(aes(ymin = Prevalence-SE, ymax = Prevalence+SE), 
+                width=c(0.2, 0.1, 0.1, 0.1, 0.2, 0.2, 0.2)*2,
+                position = position_dodge(width = 0.8)) + 
+  theme_classic() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), 
+                     expand = c(0, 0), 
+                     limits = c(0, ifelse(use_CKD_EPI, 0.22, 0.26))) + 
+  scale_fill_manual(values=c(Included=jama_blue, Removed = jama_red)) + 
+  ggtitle(caption_text) + 
+  xlab("Race/Ethnicity") + 
+  ylab("Crude Prevalence of CKD") + 
+  geom_text(aes(y=Prevalence+SE, label=format_1(100*Prevalence)), 
+            position=position_dodge(width=0.8), vjust=-0.7, 
+            color = 'black', size = 3.3) + 
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid.major.y = element_line(size=0.1, color="black"))
+g
+```
+
+\newpage
+# eGFR/CKD Categories 
+
+```{r egfr_category_plot, fig.width=6.2}
+# Change in eGFR and CKD categories after removing race coefficient (Black Adults)
+stacked_egfr_plot <- function(df, title, weighted, ylab=NULL, bartype = "fill", 
+                              ckd=FALSE, model = 2) {
+  if (model < 3) {
+     df <- df %>% filter(Model != "Bias-corrected")
+  }
+  if (ckd) {
+    g <- ggplot(df, aes(x=Model, fill=CKD_stage, 
+            weight = ifelse(rep(weighted, nrow(df)), WTSCR2YR, 1)))
+  } else {
+    g <- ggplot(df, aes(x=Model, fill=eGFR_category,
+            weight = ifelse(rep(weighted, nrow(df)), WTSCR2YR, 1)))
+  }
+  if (is.null(ylab)) {
+    ylab <- sprintf("%s of Black Adults", 
+                   ifelse(bartype=="fill", "Percent", "Number"))
+  }
+  g <- g + 
+    geom_bar(position=bartype) + 
+    ggtitle(title) + xlab("Race Coefficient") + 
+    ylab(ylab) + 
+    facet_grid(~cdc_age) + 
+    scale_x_discrete(expand = c(0, 0))
+  if (bartype == "fill")
+    g <- g + scale_y_continuous(
+      expand = c(0, 0), limits = c(0, 1.03),
+      labels = scales::percent_format(accuracy = 1)) + 
+             labs(fill="eGFR Category") 
+  if (bartype == "stack")
+    g <- g + scale_y_continuous(
+      expand = c(0, 0), limits = c(0, ifelse(use_CKD_EPI, 2.6*10^6, 3.1*10^6)),
+      labels = scales::comma, 
+                sec.axis = sec_axis(trans=~.*amc_frac, 
+                   name = "Per 100,000")) + 
+             labs(fill="KDIGO CKD Stage") 
+  g <- g + theme_bw() + 
+    theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(), 
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks.x=element_blank()) + 
+    scale_fill_nejm()
+  return(g)
+}
+```
+
+
+```{r Figure_1C}
+# Stacked: change in CKD categories after removing race coefficient (Black Adults)
+ckd_map_long <- c("G5 (eGFR: <15)", 
+                  "G4 (eGFR: 15-29)",
+                  "G3b (eGFR: 30-44)", 
+                  "G3a (eGFR: 45-59)", 
+                  "G2 (eGFR: 60-89, ACR > 30)", 
+                  "G1 (eGFR: 90+, ACR > 30)",
+                  "Normal")
+
+# caption_text <- "Changes in CKD Stage for Black Adults (2017-2018)"
+# if (use_captions) 
+#   caption_text = sprintf("Figure 1C: %s", caption_text)
+caption_text <- "C"
+
+levels(dat_black_stacked$CKD_stage) <- ckd_map_long
+dat_black_stacked %>% 
+  filter(Cycle_Year == "2017-2018") %>%
+  mutate(WTSCR2YR = WTSCR2YR * black_adult_pop / black_adult_pop_recent) %>%
+  filter(!(CKD_stage %in% c("Normal"))) %>% 
+  filter(!(cdc_age %in% c("0-17"))) %>% 
+  mutate(cdc_age = as.character(cdc_age)) %>% 
+  stacked_egfr_plot(title=caption_text, ylab=sprintf("U.S. Black Adult Population"), 
+    weighted=TRUE, bartype="stack", ckd=TRUE) 
+```
+
+```{r eFigure_2}
+# Filled: change in eGFR categories after removing race coefficient (Black Adults)
+# caption_text <- "Changes in eGFR Category for Black Adults (2017-2018)"
+# if (use_captions) 
+#   caption_text = sprintf("Figure S-1C: %s", caption_text) 
+caption_text <- ""
+
+stacked_egfr_plot(dat_black_stacked %>% 
+                    filter(Cycle_Year == "2017-2018") %>%
+                    mutate(WTSCR2YR = WTSCR2YR * black_adult_pop / sum(WTSCR2YR)), 
+                  title=caption_text, weighted=TRUE)
+```
+
+\newpage
+## CKD Prevalence by Race/Ethnicity over Time
+
+```{r eFigure_3A}
+# Age-adjusted 
+ckd_frac <- ckd_frac_raw %>% 
+  group_by(Cycle_Year, Race, census_age) %>%
+  summarize(CKD = weighted.mean(HAS_CKD, WTSCR2YR), 
+            Race_Coefficient = weighted.mean(HAS_CKD_no_race, WTSCR2YR),
+            .groups = "drop") 
+ckd_frac <- ckd_frac %>%
+  group_by(Cycle_Year, Race) %>%
+  summarize(CKD = weighted.mean(CKD, age_weight[census_age]),
+            Race_Coefficient = weighted.mean(Race_Coefficient, age_weight[census_age]),
+            .groups = "drop") 
+
+ckd_frac$Cycle_Year = ckd_frac$Cycle_Year %>% strsplit("-") %>% 
+  sapply(function(x) mean(as.numeric(x)))
+ckd_frac_black <- ckd_frac[ckd_frac$Race=="Black",
+  "Race_Coefficient"] %>% setNames(NULL) %>% unlist
+ckd_frac[,"Race_Coefficient"] <- "Included"
+
+# black_add <- ckd_frac %>% 
+#   filter(Race == "Black" & Cycle_Year != 2017.5) %>%
+#   mutate(Race_Coefficient = "Removed")  %>%
+#   rbind(data.frame(Cycle_Year = 2017.5,
+#                    Race = "Black",
+#                    CKD = ckd_frac_black[length(ckd_frac_black)], 
+#                    Race_Coefficient = "Removed"))
+# ckd_frac <- rbind(ckd_frac, black_add)
+
+ckd_frac <- rbind(ckd_frac, 
+  data.frame(Cycle_Year = cycle_years %>% setNames(NULL) %>%
+               strsplit("-") %>% sapply(function(x) mean(as.numeric(x))),
+             Race = c("Black") %>%
+               rep(each = length(cycle_years_input)/2),
+             CKD = c(ckd_frac_black),
+             Race_Coefficient = c("Removed") %>%
+               rep(each = length(cycle_years_input))
+  )
+)
+
+g <- ckd_frac %>% 
+  filter(Race != "Other") %>% 
+  ggplot(aes(x = Cycle_Year, y = CKD, 
+             group = interaction(Race, Race_Coefficient))) + 
+  geom_line(aes(color = Race, linetype = Race_Coefficient), lwd = 1.2) + 
+  #ggtitle("Trends in Age-Adjusted CKD Prevalence across Race/Ethnicity") + 
+  ggtitle("A") + ylab("Age-Adjusted Prevalence of CKD") + xlab("Year") + 
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), 
+    expand = c(0, 0), limits = c(0, ifelse(use_CKD_EPI, 0.25, 0.3))) + 
+  theme_classic() + 
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid.major.y = element_line(size=0.1, color="black")) + 
+  scale_linetype_discrete(name = "Race Coefficient") + 
+  scale_fill_manual(values=c(Black=jama_red, 
+                             White = jama_blue,
+                             Hispanic = jama_green)) + 
+  scale_x_continuous(breaks = seq(2000, 2020, 2))
+g
+```
+
+```{r eFigure_3B}
+ckd_frac <- ckd_frac_raw %>% 
+  group_by(Cycle_Year, Race) %>%
+  summarize(CKD = weighted.mean(HAS_CKD, WTSCR2YR), 
+            Race_Coefficient = weighted.mean(HAS_CKD_no_race, WTSCR2YR),
+            .groups = "drop") 
+
+ckd_frac$Cycle_Year = ckd_frac$Cycle_Year %>% strsplit("-") %>% 
+  sapply(function(x) mean(as.numeric(x)))
+ckd_frac_black <- ckd_frac[ckd_frac$Race=="Black",
+  "Race_Coefficient"] %>% setNames(NULL) %>% unlist
+ckd_frac[,"Race_Coefficient"] <- "Included"
+ckd_frac <- rbind(ckd_frac, 
+  data.frame(Cycle_Year = cycle_years %>% setNames(NULL) %>% 
+               strsplit("-") %>% sapply(function(x) mean(as.numeric(x))),
+             Race = c("Black") %>% 
+               rep(each = length(cycle_years_input)/2), 
+             CKD = c(ckd_frac_black),  
+             Race_Coefficient = c("Removed") %>%
+               rep(each = length(cycle_years_input))
+  )
+)
+
+g <- ckd_frac %>% 
+  filter(Race != "Other") %>% 
+  ggplot(aes(x = Cycle_Year, y = CKD, 
+             group = interaction(Race, Race_Coefficient))) + 
+  geom_line(aes(color = Race, linetype = Race_Coefficient), lwd = 1.2) + 
+  # ggtitle("Trends in Crude CKD Prevalence across Race/Ethnicity") + 
+  ggtitle("B") + ylab("Crude Prevalence of CKD") + xlab("Year") + 
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), 
+    expand = c(0, 0), limits = c(0, ifelse(use_CKD_EPI, 0.22, 0.27))) + 
+  theme_classic() + 
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid.major.y = element_line(size=0.1, color="black")) + 
+  scale_linetype_discrete(name = "Race Coefficient") + 
+  scale_fill_manual(values=c(Black=jama_red, 
+                             White = jama_blue,
+                             Hispanic = jama_green)) + 
+  scale_x_continuous(breaks = seq(2000, 2020, 2))
+g
+```
+
+
+\newpage
+# Reclassification of CKD Stage and Status 
+
+```{r ckd_change_table}
+# Table of reclassifications by CKD status and stage
+summarize_all <- function(df) {
+  df %>% summarize(
+    "NHANES (2017-2018)" = sum(Cycle_Year == "2017-2018"),
+    "Per 100,000 Black Adults (2017-2018)" = r_sum(WTSCR2YR[Cycle_Year == "2017-2018"] * amc_frac_recent), 
+    "U.S. Black Adult Population (2017-2018)" = r_sum(WTSCR2YR[Cycle_Year == "2017-2018"] * black_adult_pop/black_adult_pop_recent),
+    "NHANES (2015-2016)" = sum(Cycle_Year %in% c("2015-2016")),
+    "NHANES (2013-2014)" = sum(Cycle_Year %in% c("2013-2014")),
+    "NHANES (2011-2012)" = sum(Cycle_Year %in% c("2011-2012")),
+    "NHANES (2009-2010)" = sum(Cycle_Year %in% c("2009-2010")),
+    "NHANES (2007-2008)" = sum(Cycle_Year %in% c("2007-2008")),
+    "NHANES (2005-2006)" = sum(Cycle_Year %in% c("2005-2006")),
+    "NHANES (2003-2004)" = sum(Cycle_Year %in% c("2003-2004")),
+    "NHANES (2001-2002)" = sum(Cycle_Year %in% c("2001-2002")),
+    "NHANES (2001-2018)" = n(),
+    .groups = "drop"
+  ) %>% t %>% as.data.frame()
+}
+
+# Compute using predefined summarization function
+reclass_table <- dat_black %>% 
+  group_by(CKD_reclass) %>% 
+  summarize_all()
+
+r_names <- rownames(reclass_table)[-1]
+reclass_table <- reclass_table[r_names,]
+
+# Functions for computing sums and ratios
+r_trim_num_sum_char <- function(x ,y, z=0, z2=0) {
+  output <- as.numeric(trimws(x)) + as.numeric(trimws(y)) + as.numeric(trimws(z)) + as.numeric(trimws(z2)) 
+  output %>% as.character() %>% return()
+}
+r_trim_num_div_char <- function(x, y) {
+  x <- comma_to_num(x)
+  y <- comma_to_num(y)
+  ci <- binom.confint(x, y, methods = "exact")
+  formatted_ci <- apply(100*ci[c("mean","lower","upper")], 1, 
+    function(row) {
+      do.call(sprintf, c(list("%s (%s-%s)"), format_1(row) %>% trimws))
+    })
+  return(formatted_ci)
+}
+
+colnames(reclass_table) <- c("No Change: CKD","No Change: Not CKD",
+  "Reclassified: CKD Stage","Reclassified: CKD Status")
+```
+
+```{r processed_ckd_change_table}
+# Compute sums and ratios
+reclass_table <- reclass_table %>% 
+  mutate(`Total Count` = r_trim_num_sum_char(
+    `No Change: CKD`, `No Change: Not CKD`, 
+    `Reclassified: CKD Stage`, `Reclassified: CKD Status`
+  )) %>% 
+  mutate(`CKD Count` = r_trim_num_sum_char(
+    `No Change: CKD`, `Reclassified: CKD Stage`, `Reclassified: CKD Status`
+  )) %>%
+  mutate(`Reclassified: Total` = r_trim_num_sum_char(
+    `Reclassified: CKD Stage`, `Reclassified: CKD Status`
+  )) %>%
+  mutate(`Previous: CKD` = r_trim_num_sum_char(
+    `Reclassified: CKD Stage`, `No Change: CKD`
+  )) %>%
+  mutate(`No Change: Not CKD` = r_trim_num_sum_char(
+    `No Change: Not CKD`, `Reclassified: CKD Status`
+  )) %>%
+  mutate(`% of Reclassified CKD Status` = r_trim_num_div_char(
+    `Reclassified: CKD Status`, `No Change: Not CKD`
+  )) %>%
+  mutate(`% of Reclassified CKD Stage` = r_trim_num_div_char(
+    `Reclassified: CKD Stage`, `Previous: CKD`
+  )) %>% 
+  mutate(`Reclassified: CKD Status` = comma(as.numeric(
+    `Reclassified: CKD Status`), accuracy=1)) %>%
+  mutate(`No Change: Not CKD` = comma(as.numeric(
+    `No Change: Not CKD`), accuracy=1)) %>%
+  mutate(`Reclassified: CKD Stage` = comma(as.numeric(
+    `Reclassified: CKD Stage`), accuracy=1)) %>% 
+  mutate(`Previous: CKD` = comma(as.numeric(
+    `Previous: CKD`), accuracy=1)) %>%
+  mutate(`Total Count` = comma(as.numeric(
+    `Total Count`), accuracy=1))
+
+reclass_table$Population <- r_names
+reclass_table <- reclass_table %>% 
+  select(Population, 
+         `Reclassified: CKD Status`, `No Change: Not CKD`,
+         `% of Reclassified CKD Status`,
+         `Reclassified: CKD Stage`, `Previous: CKD`,
+         `% of Reclassified CKD Stage`
+         )
+
+reclass_ci <- svyby(~I(CKD_reclass == "Reclassified CKD Status") + 
+                     I(CKD_reclass == "Reclassified CKD Stage"),
+                    by=~HAS_CKD, design = des_black_recent, 
+                    FUN = svyciprop, na.rm = TRUE, 
+                    method = "beta", vartype = "ci") %>%
+  select(-HAS_CKD) %>% unlist
+
+status <- format_1(100*reclass_ci[c(T,F)]) %>% trimws
+status <- do.call(sprintf, c(list("%s (%s-%s)"), status))
+stage <- format_1(100*reclass_ci[c(F,T)]) %>% trimws
+stage <- do.call(sprintf, c(list("%s (%s-%s)"), stage))
+reclass_table[grep("Black", reclass_table$Population), 
+              "% of Reclassified CKD Status"] <- status
+reclass_table[grep("Black", reclass_table$Population), 
+              "% of Reclassified CKD Stage"]  <- stage
+
+colnames(reclass_table) <- c(
+  "Population",
+  "Reclassified Status",
+  "Total: Non-CKD", 
+  "Reclassified", 
+  "Reclassified Stage",
+  "Total: CKD", 
+  "Reclassified"
+)
+
+reclass_table <- rbind(
+  c("","no.","no.","% (95% CI)","no.","no.","% (95% CI)") %>% 
+    setNames(colnames(reclass_table)),
+  reclass_table
+)
+```
+
+```{r Table_1}
+# Generate latex table
+reclass_latex <- reclass_table
+linesep <- rep("", nrow(reclass_latex)-1)
+linesep[c(4,8,12)] <- "\\addlinespace"
+caption_text <- "New CKD Diagnoses and CKD Stage Reclassifications in Black Adults"
+reclass_latex[,4] <- gsub("-","—", reclass_latex[,4])
+reclass_latex[,7] <- gsub("-","—", reclass_latex[,7])
+if (use_captions) 
+  caption_text = sprintf("Table 1: %s", caption_text) 
+reclass_latex <- reclass_latex %>% 
+    kable("latex", align = c("r","c","c","c","c","c","c"), booktabs = TRUE, linesep = linesep,
+          caption = caption_text) %>% 
+    add_header_above(c("", "Reclassified CKD Status in Non-CKD Patients" = 3, 
+                       "Reclassified CKD Stage in CKD Patients" = 3)) %>% 
+    row_spec(1, italic = TRUE) %>%
+    pack_rows("Most Recent", 2, 4) %>%
+    pack_rows("Previous Years", 5, 12) %>%
+    pack_rows("All Years", 13, 13) %>%
+    kable_styling(latex_options = c("scale_down","hold_position"))
+
+filler_rows <- rep("", ncol(reclass_table)-1) %>% setNames(colnames(reclass_table)[-1])
+
+reclass_table <- rbind(
+  reclass_table[1,], 
+  c(Population = "Most Recent", filler_rows), 
+  reclass_table[2:4,], 
+  c(Population = "Previous Years", filler_rows),
+  reclass_table[5:(nrow(reclass_table)-1),],
+  c(Population = "All Years", filler_rows),
+  reclass_table[nrow(reclass_table),]
+)
+
+save_table(reclass_table, title = "Table-1")
+save_latex(reclass_latex, title = "Table-1")
+reclass_latex
+```
+
+\newpage
+# Recommended Carboplatin Dose 
+
+- Calvert Equation: target AUC $\times$ (GFR + 25)
+    - Target AUC (mg.min/mL) = 4-6 (previously treated) and 6-8 (previously untreated); 
+    - GFR (mL/min) = eGFR (ml/min/1.73 m.sq.) $\times$ BSA / 1.73
+    - 25 (mL/min) = non-GFR clearance of carboplatin
+- National Cancer Institute Cancer Therapy Evaluation Program (NCI/CTEP) recommendations:
+    - GFR used in the Calvert formula for carboplatin dosing should not exceed 125 ml/min
+    - Carboplatin dose should not exceed target AUC $\times$ 150 mL/min
+- Gynecologic Oncology Group (GOG) recommendations: 
+    - Serum creatinine value used to estimate GFR must be at least 0.7 mg/dL
+
+```{r Figure_2A}
+#https://www.mskcc.org/clinical-updates/new-guidelines-carboplatin-dosing
+#https://pubmed.ncbi.nlm.nih.gov/2681557/
+#https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6317965/
+carboplatin_dosing_lines <- function(df, auc) {
+  # caption_text <- "Calvert-Equation Recommendation in Cancer Patients"
+  # if (use_captions) 
+  #   sprintf("Figure 2A: %s", caption_text) 
+  caption_text <- "A" 
+  ggplot(df, aes(x=eGFR_quantile/max(eGFR_quantile), y=carboplatin, 
+                 color = ifelse(Model == "Yes","Included","Removed"),
+                 linetype = ifelse(Target_AUC == 5, "Yes (Target AUC=5)","No (Target AUC=7)"))
+         ) + 
+    geom_smooth(method="loess", formula = y~x, se = TRUE) + 
+    scale_x_continuous(labels = scales::percent_format(accuracy = 1), 
+                       limits = c(0, 1.02), expand = c(0,0)) + 
+    theme_classic() + 
+    scale_y_continuous(limits = c(0,1000), expand = c(0,0)) + 
+    theme(legend.position="bottom") + 
+    scale_color_nejm(name = "Race Coefficient: ") +
+    scale_linetype_discrete(name = "Prior Treatment: ") + 
+    xlab("eGFR Percentile") + ylab("Carboplatin Dose (mg)") + 
+    ggtitle(caption_text) + 
+    theme(plot.title = element_text(face = "bold"),
+          panel.grid.major.y = element_line(size=0.1, color="black")) + 
+    guides(linetype=guide_legend(keywidth = 1.9, keyheight = 1, nrow=2,
+                                 override.aes = list(col = 'black')),
+           colour=guide_legend(keywidth = 1.9, keyheight = 1, nrow=2))
+}
+dat_black_stacked %>% 
+  filter(HAS_RECENT_CANCER) %>% 
+  data.frame(Target_AUC = untreated_AUC) %>% 
+  mutate(carboplatin = pmin(150*untreated_AUC, carboplatin*untreated_AUC/mid_AUC)) %>%
+  rbind(dat_black_stacked %>% 
+    filter(HAS_RECENT_CANCER) %>%
+    data.frame(Target_AUC = treated_AUC) %>% 
+    mutate(carboplatin = pmin(150*treated_AUC, carboplatin*treated_AUC/mid_AUC)) 
+  ) %>%
+  carboplatin_dosing_lines()
+```
+
+```{r carboplatin_hist}
+# Histogram of differences in carboplatin dosing following race coefficient removal: U.S. estimates
+carboplatin_dosing_hist <- function(df, title, weighted=TRUE,
+    xlab="Change in Carboplatin Dose (%)", ylab="Black Cancer Patients") {
+  if (weighted) {
+    g <- ggplot(df, aes(weight = WTSCR18YR * amc_frac))
+  } else {
+    g <- ggplot(df)
+  }
+  g <- g + geom_histogram(aes(x = carboplatin_diff-1, fill = Cancer_Type), 
+                          color = 'black', alpha = 1, 
+                          bins = ifelse(use_CKD_EPI, 30, 25)) +
+    ggtitle(title) + xlab(xlab) + ylab(ylab) + 
+    scale_x_continuous(labels = scales::percent_format(accuracy = 1), 
+       expand = c(0, 0)) + #, limits = c(-0.152,0.01)) + 
+    scale_y_continuous(labels = scales::comma, expand = c(0, 0), 
+       limits = c(0, ifelse(use_CKD_EPI, 450, 450))) + 
+    scale_fill_manual(name = "Cancer Type", 
+                      values = c("lightblue","blue")) +
+    annotate("rect", xmin=ifelse(use_CKD_EPI, -0.15, -0.18), 
+             xmax=-0.1, ymin=0.01, ymax=Inf, 
+             fill = 'red', alpha = 0.2) + 
+    annotate(geom="label", x=-0.1+0.004, y=365, 
+             label="Carboplatin dose reduction of 10% \ndoubles the 5-year relapse rate in\nsome cancers (Oliver et al. 2011)", 
+             size = 3.5, hjust = 0) + 
+    theme_classic() + 
+    theme(legend.position="bottom",
+          panel.grid.major.y = element_line(size=0.1, color="black"),
+          plot.title = element_text(face = "bold"),
+          panel.border = element_rect(colour = "black", fill=NA))
+  return(g)
+}
+```
+
+```{r Figure_2B}
+# Filter for recent (within 5 years) general or ovarian cancer
+black_cancer <- dat_black %>% 
+  filter(HAS_RECENT_CANCER) %>% filter(IS_FEMALE)
+black_ovarian <- dat_black %>% 
+  filter(HAS_RECENT_CANCER) %>% filter(HAS_OVARIAN) %>% filter(IS_FEMALE)
+
+# Summary stats for following paragraph description
+cancer_sub_10 <- sum(black_cancer %>% select(carboplatin_diff) < 0.9, na.rm=TRUE)
+ovarian_sub_10 <- sum(black_ovarian %>% select(carboplatin_diff) < 0.9, na.rm=TRUE)
+
+# caption_text <- "Calvert-Equation Recommendation in Cancer Patients"
+# if (use_captions) 
+#   caption_text = sprintf("Figure 2B: %s", caption_text) 
+caption_text <- "B"
+
+black_cancer %>% 
+  mutate(Cancer_Type = ifelse(HAS_OVARIAN, "Ovarian", "All Cancers")) %>%
+  carboplatin_dosing_hist(title=caption_text, 
+                          ylab="Per 100,000 Black Female Cancer Patients")
+```
+
+- When estimating carboplatin dose using the Calvert equation parameterized by eGFR without a race coefficient, `r ovarian_sub_10` / `r nrow(black_ovarian)` (`r signif(100*ovarian_sub_10/nrow(black_ovarian), 3)`%) of Black ovarian cancer patients and `r cancer_sub_10` / `r nrow(black_cancer)` (`r signif(100*cancer_sub_10/nrow(black_cancer), 3)`%) of Black general cancer patients would receive dose reductions of >10%.
+- In a randomized control trial of eGFR-informed carboplatin use in 559 patients with stage I seminoma, a carboplatin dose reduction of 10% nearly doubled (1.9x) the 5-year relapse rate (Oliver et al. 2011). https://ascopubs.org/doi/10.1200/JCO.2009.26.4655
+- Cancer patients were filtered by diagnosis within the last 5 years. "Ovarian cancer patients face an appreciable risk of recurrence in the first 5 years after second-look laparotomy with negative findings after platinum-based chemotherapy, but those who remain disease free at 5 years have excellent long-term survival rates" (Rubin et al. 1999. https://pubmed.ncbi.nlm.nih.gov/9916949/)
+
+
+```{r clinical_impact_setup}
+dose_reduction <- c("low","contraindicated")
+get_count_list <- function(weights) {
+  c(comma(sum(weights)),
+    comma(sum(weights)*amc_frac), 
+    comma(length(weights))) %>% 
+  setNames(c("U.S.","AMC","NHANES")) %>% return()
+}
+count_list <- list()
+count_list[['Donors']] <- get_count_list(dat_black$WTSCR18YR[dat_black$DONOR_CANDIDATE])
+count_list[['Hypertension']] <- get_count_list(dat_black$WTSCR18YR[dat_black$HAS_HTN])
+count_list[['Diabetes']] <- get_count_list(dat_black$WTSCR18YR[dat_black$HAS_DIABETES])
+count_list[['CKD']] <- get_count_list(dat_black$WTSCR18YR[dat_black$HAS_CKD])
+count_list[['Medicare-Eligible']] <- get_count_list(dat_black$WTSCR18YR[dat_black$medicare])
+count_list[['HD']] <- get_count_list(dat_black$WTSCR18YR[dat_black$HAS_HD])
+count_list[['Cancer']] <- get_count_list(dat_black$WTSCR18YR[dat_black$HAS_RECENT_CANCER])
+count_list[['General']] <- get_count_list(dat_black$WTSCR18YR)
+
+c_med_iqr <- function(df, cols, units) {
+  for (i in 1:length(cols)) {
+    median_col <- sprintf("Median %s", cols[i])
+    IQR_col <- sprintf("IQR %s", cols[i])
+    col_name <- sprintf("Median %s (IQR)—%s", cols[i], units[i])
+    df[, col_name] <- sprintf("%s (%s)", 
+      df[, median_col] %>% unlist, df[, IQR_col] %>% unlist)
+    df[, median_col] <- df[, IQR_col] <- NULL
+  } 
+  return(df)
+}
+
+full_round <- function(frac) {
+  digits <- 1 - floor(pmin(0, log10(frac)))
+  format(frac, digits=digits, nsmall=1) %>% trimws %>% return()
+}
+
+c_count_prop <- function(df, cols, pop = "U.S.") {
+  df <- df %>% 
+    rbind(Change = rep(NA, ncol(df))) %>% 
+    as.data.frame()
+  for (i in 1:length(cols)) {
+    count_col <- sprintf("%s-%s no.", cols[i], pop)
+    percent_col <- cols[i] %>% paste0("—U.S. %")
+    if (pop == "NHANES") 
+      percent_col <- cols[i] %>% paste0("—NHANES %")
+    col_name <- cols[i] %>% paste0("—no. (%)")
+    num_val <- df[, count_col] %>% unlist 
+    frac_val <- df[, percent_col] %>% unlist 
+    diff_frac <- frac_val %>% na.omit %>% diff
+    df[, col_name] <- sprintf("%s (%s)", 
+        num_val %>% comma(accuracy = 1), 
+        frac_val %>% full_round
+    )
+    df[nrow(df), ncol(df)] <- sprintf("%s (%s)", 
+        num_val %>% na.omit %>% diff %>% comma(accuracy = 1),
+        frac_val %>% na.omit %>% diff %>% full_round
+    )
+  } 
+  return(df)
+}
+```
+
+
+```{r clinical_impact_functions}
+ci_to_str <- function(vec) {
+  return(do.call(sprintf, c(list("%s (%s-%s)"), vec)))
+}
+
+svyci <- function(design, bin, filter, scaling_f) {
+  f <- (filter %>% as.character)[2]
+  total <- svyby(as.formula(bin), by=filter, 
+                 design = design, keep.names = TRUE,
+                 FUN = svytotal, na.rm = TRUE) %>%
+  filter(!!as.symbol(f) == "TRUE") %>%
+  select(contains("TRUE"), -contains("se.I")) %>% 
+    unlist %>% setNames(NULL) 
+  total <- comma(total * scaling_f, accuracy=1)
+  
+  output <- svyby(as.formula(bin), by=filter, 
+                 design = design, keep.names = TRUE,
+                 FUN = svyciprop, method = "beta", 
+                 vartype = "ci", na.rm = TRUE) %>%
+  filter(!!as.symbol(f) == "TRUE") 
+  
+  prop <- output[2] %>% 
+    unlist %>% setNames(NULL)
+  ciprop <- output %>%
+    select(contains("ci_")) %>% 
+      unlist %>% setNames(NULL)
+  
+  return(sprintf("%s (%s)", total, format_1(100*prop) %>% trimws))
+  #return(ci_to_str(c(total, format_1(100*ciprop)) %>% trimws))
+}
+
+svy_ci_row <- function(design, var, check, filter, scaling_f) {
+  check_use <- check
+  if (!grepl(",", check)) {
+    check_use <- sprintf("'%s'", check)
+  } else {
+    check <- eval(parse(text=check))
+  }
+  
+  bin <- sprintf("~I(%s %%in%% %s)", var, check_use)
+  output_1 <- svyci(design, bin, filter, scaling_f)
+  
+  bin_no_race <- sprintf("~I(%s_no_race %%in%% %s)", var, check_use)
+  output_2 <- svyci(design, bin_no_race, filter, scaling_f)
+  
+  bin_both <- sprintf("~I(!(%s %%in%% %s) & %s_no_race %%in%% %s)", 
+                      var, check_use, var, check_use)
+  output_3 <- svyci(design, bin_both, filter, scaling_f)
+  
+  f <- design$variables[,as.character(filter)[2]]
+  ratio_est <- svyratio(numerator = as.formula(bin_both), 
+                        denominator = as.formula(bin),
+                        design = design[f, ],
+                        na.rm = TRUE)
+  output_4 <- format_1(100*c(ratio_est$ratio, 
+                             confint(ratio_est))) %>%
+    trimws %>% ci_to_str()
+  
+  return(c(output_1, output_2, output_3, output_4))
+}
+
+ci_table <- function(title, pop, threshold, design, var, check, filter) {
+  scaling_f <- ifelse(pop == "AMC", amc_frac, 1)
+  c(title, threshold, 
+    svy_ci_row(design, var, check, filter, scaling_f)) %>% 
+    setNames(NULL)
+}
+```
+
+```{r clinical_impact_table}
+# For main table
+pop_list <- c("for Black Adults in the United States","per 100,000 Black Adults","for Black Adults in NHANES") %>% 
+  setNames(c("U.S.","AMC","NHANES"))
+
+impact_tables <- lapply(names(pop_list), function(pop) {
+  if (pop == "NHANES") {
+    design <- des_black_unweighted
+  } else {
+    design <- des_black
+  }
+  impact_table <- data.frame(
+    donation = ci_table(title = "Ineligible to Donate Kidney", pop = pop,
+      threshold = "<60", design = design, var = "donation",
+      check = "Not acceptable", filter = ~DONOR_CANDIDATE),
+    ACEi = ci_table(title = "ACE Inhibitors: Dose Reduction", pop = pop,
+      threshold = "<30", design = design, var = "ACEinhibitors",
+      check = "DR", filter = ~HAS_HTN),
+    metformin = ci_table(title = "Metformin: Contraindicated", pop = pop,
+      threshold = "<30", design = design, var = "metformin",
+      check = "Contraindicated", filter = ~HAS_DIABETES),
+    sglt2 = ci_table(title = "SGLT2 Inhibitors: Contraindicated", pop = pop,
+      threshold = "<30", design = design, var = "SGLT2",
+      check = "Contraindicated", filter = ~HAS_DIABETES),
+    referral = ci_table(title = "Nephrologist Referral", pop = pop,
+      threshold = "<30", design = design, var = "referral",
+      check = "Recommended", filter = ~HAS_CKD),
+    transplant = ci_table(title = "Eligible for Kidney Transplant", pop = pop,
+      threshold = "<20", design = design, var = "transplant",
+      check = "Eligible", filter = ~HAS_CKD),
+    fistula = ci_table(title = "Pre-emptive Arteriovenous Fistula", pop = pop,
+      threshold = "<18", design = design, var = "fistula",
+      check = "Yes", filter = ~HAS_CKD),
+    mnt = ci_table(title = "Medical Nutrition Therapy Covered", pop = pop,
+      threshold = "13-50", design = design, var = "mnt",
+      check = "Yes", filter = ~medicare),
+    kde = ci_table(title = "Kidney Disease Education Covered", pop = pop,
+      threshold = "15-29", design = design, var = "kde",
+      check = "Yes", filter = ~medicare),
+    BB = ci_table(title = "Beta Blockers: Dose Reduction", pop = pop,
+      threshold = "<45", design = design, var = "betablockers",
+      check = "MDR", filter = ~HAS_HD),
+    nctn = ci_table(title = "Ineligible for NCI NCTN Trials", pop = pop,
+      threshold = "<50", design = design, var = "exclusion",
+      check = "None", filter = ~HAS_RECENT_CANCER),
+    etctn = ci_table(title = "Ineligible for NCI ETCTN Trials", pop = pop,
+      threshold = "<60", design = design, var = "exclusion",
+      check = "c('None','NCTN only')", filter = ~HAS_RECENT_CANCER),
+    mtx = ci_table(title = "Methotrexate/Melphalan: Dose Reduction", pop = pop,
+      threshold = "<60", design = design, var = "mtx",
+      check =  "c('MDR','Contraindicated')", filter = ~HAS_RECENT_CANCER),
+    opioid = ci_table(title = "Opioids: Dose Reduction", pop = pop,
+      threshold = "<60", design = design, var = "opioid",
+      check = "DR", filter = ~IS_BLACK),
+    warfarin = ci_table(title = "Warfarin/LMWH: Dose Reduction", pop = pop,
+      threshold = "<30", design = design, var = "warfarin",
+      check = "DR", filter = ~IS_BLACK),
+    nsaids = ci_table(title = "NSAIDs: Contraindicated", pop = pop,
+      threshold = "<30", design = design, var = "nsaids",
+      check = "Contraindicated", filter = ~IS_BLACK)
+  )
+  impact_table <- impact_table %>% t %>% as.data.frame
+  impact_table %>% t %>% as.data.frame
+  colnames(impact_table) <- c("Implication","eGFR Threshold",
+                              "Including Race","Removing Race",
+                              "Absolute Change","Relative Change")
+  rownames(impact_table) <- NULL
+  impact_table <- rbind(
+    c("","ml/min/1.73 m.sq.", "no. (%)","no. (%)","no. (%)","% (95% CI)") %>% 
+      setNames(colnames(impact_table)),
+    impact_table
+  )
+  return(impact_table)
+}) %>% setNames(names(pop_list))
+```
+
+
+```{r display_table}
+impact_latex <- function(df, pop, caption) {
+  df$`Relative Change` <- gsub("-","—", df$`Relative Change`)
+  linesep <- rep("", nrow(df)-1)
+  linesep[4] <- "\\addlinespace"
+  caption_text <- sprintf("Changes to eGFR-Dependent Clinical Decisions %s (2001-2018)",
+                          pop_list[pop])
+  if (use_captions) 
+    caption_text = sprintf("Table %s: %s", caption, caption_text) 
+  
+  df %>%
+      kable("latex", align = c("r","c","c","c","c","c"), 
+            booktabs = TRUE, linesep = linesep, 
+            caption = caption_text) %>% 
+      row_spec(1, italic = TRUE) %>%
+      pack_rows(sprintf("Eligible Kidney Donors (n=%s)", 
+                        count_list$Donors[pop]), 2, 2) %>%
+      pack_rows(sprintf("Hypertension (n=%s)", 
+                        count_list$Hypertension[pop]), 3, 3) %>%
+      pack_rows(sprintf("Diabetes (n=%s)", 
+                        count_list$Diabetes[pop]), 4, 5) %>%
+      pack_rows(sprintf("CKD (n=%s)", 
+                        count_list$CKD[pop]), 6, 8) %>%
+      pack_rows(sprintf("Medicare-Eligible (n=%s)", 
+                        count_list$`Medicare-Eligible`[pop]), 9, 10) %>%
+      pack_rows(sprintf("Heart Disease (n=%s)", 
+                        count_list$HD[pop]), 11, 11) %>%
+      pack_rows(sprintf("Cancer (n=%s)", 
+                        count_list$Cancer[pop]), 12, 14) %>%
+      pack_rows(sprintf("General Population (n=%s)", 
+                        count_list$General[pop]), 15, 17) %>%
+      kable_styling(latex_options = c(
+        "scale_down","hold_position")) %>% 
+      footnote(general = 'Clinical recommendations from 2012 KDIGO Clinical Practice Guidelines. Exceptions: pre-emptive arteriovenous fistula practices and SGLT2 inhibitor guidelines from literature (see methods), medical nutritional therapy and kidney disease education coverage from Medicare Part B Benefit Policy, and clinical trial eligibility from NCI Recommended Protocol Text and Guidance (2018)',
+        number = c(
+          'Eligible Kidney Donors: non-pregnant subjects without current HIV, HCV, or HBV infection, diabetes, uncontrolled hypertension, BMI > 35, or cancer',
+          "Hypertension: self-report of clinician-diagnosis of hypertension on two separate occasions, currently taking antihypertensives, or blood pressure > 130/80 (average of 3 readings); uncontrolled hypertension: blood pressure > 140/90 (average of 3 readings)",
+          "Diabetes: self-report of clinician-diagnosed diabetes, currently taking oral hypoglycemic agents or insulin, HbA1c > 6.5%, or fasting blood glucose > 126 mg/dL",
+          "CKD: eGFR with race > 60 or albumin-creatinine ratio > 30 mg/g",
+          "Medicare-eligible: self-reported Medicare coverage or ages 65 and older",
+          "Heart disease: self-report of clinician-diagnosed coronary heart disease, angina, previous heart attack, or congestive heart failure",
+          "Cancer: self-report of clinician-diagnosed cancer within the past 5 years",
+          'General Population: all non-pregnant adult (18-84) Black subjects'),
+        alphabet = c(
+          "CKD: chronic kidney disease",
+          "NCI: National Cancer Institute",
+          "ETCTN: Experimental Therapeutics Clinical Trials Network; Phase I trials",
+          "NCTN: National Clinical Trials Network; large Phase II/III trials",
+          "LMWH: low molecular weight heparins",
+          "NSAIDs: non-steroidal anti-inflammatory drugs"
+          ), 
+        general_title = "Note: ", 
+        alphabet_title = "Abbreviations: ",
+        number_title = "Population Definitions: ", 
+        threeparttable = TRUE)
+}
+
+impact_tsv <- function(table, pop) {
+  filler_rows <- rep("", ncol(table)-1) %>% setNames(colnames(table)[-1])
+  rbind(
+    table[1,], 
+    c(Population = sprintf("Eligible Kidney Donors (n=%s)", 
+                           count_list$Donors[pop]), filler_rows), 
+    table[2,], 
+    c(Population = sprintf("Hypertension (n=%s)", 
+                           count_list$Hypertension[pop]), filler_rows), 
+    table[3,], 
+    c(Population = sprintf("Diabetes (n=%s)", 
+                           count_list$Diabetes[pop]), filler_rows), 
+    table[4:5,], 
+    c(Population = sprintf("CKD (n=%s)", 
+                           count_list$CKD[pop]), filler_rows), 
+    table[6:8,], 
+    c(Population = sprintf("Medicare-Eligible (n=%s)", 
+                           count_list$`Medicare-Eligible`[pop]), filler_rows), 
+    table[9:10,], 
+    c(Population = sprintf("Heart Disease (n=%s)", 
+                           count_list$HD[pop]), filler_rows), 
+    table[11,], 
+    c(Population = sprintf("Cancer (n=%s)", 
+                           count_list$Cancer[pop]), filler_rows), 
+    table[12:14,], 
+    c(Population = sprintf("General (n=%s)", 
+                           count_list$General[pop]), filler_rows), 
+    table[15:nrow(table),]
+  ) %>% return()
+}
+```
+
+```{r Table_2}
+impact_tables$AMC$percent_change <- impact_tables$U.S.$percent_change
+impact_latex_AMC <- impact_latex(impact_tables$AMC, pop = "AMC", caption = 2)
+save_table(impact_tsv(impact_tables$AMC, pop = "AMC"), title = "Table-2")
+save_latex(impact_latex_AMC, title = "Table-2")
+impact_latex_AMC
+```
+
+```{r Table_3}
+impact_latex_US <- impact_latex(impact_tables$U.S., pop = "U.S.", caption = 3)
+save_table(impact_tsv(impact_tables$U.S., pop = "U.S."), title = "Table-3")
+save_latex(impact_latex_US, title = "Table-3")
+impact_latex_US
+```
+
+```{r eTable_3}
+impact_latex_NHANES <- impact_latex(impact_tables$NHANES, pop = "NHANES", caption = 3)
+save_table(impact_tsv(impact_tables$NHANES, pop = "NHANES"), title = "eTable-3")
+save_latex(impact_latex_NHANES, title = "eTable-3")
+impact_latex_NHANES
+```
+
+```{r sandbox}
+# delta <- dat_black %>%
+#   filter(Cycle_Year=="2017-2018") %>%
+#   group_by(cdc_age) %>%
+#   summarize(CKD = sum(WTSCR2YR[HAS_CKD]),
+#             new_CKD = sum(WTSCR2YR[HAS_CKD_no_race]))
+# delta[,-1] %>% apply(1, diff) %>% round(0)
+# delta[,-1] %>% apply(1, function(row) round(100*(row[2]-row[1])/row[1], 1))
+# mean(dat_black$carboplatin_diff[dat_black$HAS_RECENT_CANCER] < 0.9)
+# rw_percent(dat_black$carboplatin_diff[dat_black$HAS_RECENT_CANCER] < 1, 
+#            dat_black$WTSCR18YR[dat_black$HAS_RECENT_CANCER])
+# sum(dat_black$WTSCR18YR[dat_black$carboplatin_diff < 0.9 & dat_black$HAS_RECENT_CANCER])
+# sum(dat_black$WTSCR18YR[dat_black$carboplatin_diff < 0.9 & 
+#       dat_black$HAS_RECENT_CANCER & dat_black$HAS_OVARIAN])
+```
+
