@@ -175,18 +175,18 @@ keep_var <- list(
           sprintf("MCQ230%s", c(LETTERS[1:4])),
           sprintf("MCD240%s", c(LETTERS[1:4])),
           sprintf("MCQ240%s", c(LETTERS,"AA","BB","CC","DD","DK"))),
-  ALB_CR = c("URXUMA","URXUCR","URDACT"),
-  KIQ_U = c("KIQ025", "KIQ026"),
+  L16 = c("URXUMA","URXUCR"), #"URDACT") # 
+  # KIQ = c("KIQ025", "KIQ026"),
   BPX = c("BPXSY1","BPXSY2","BPXSY3","BPXDI1","BPXDI2","BPXDI3"),
   BPQ = c("BPQ030","BPQ040A"), 
-  DIQ = c("DIQ010","DIQ050","DID070","DIQ160","DIQ175A"),
-  GLU = c("LBXGLU"),
-  GHB = c("LBXGH"),
-  HIV = c("LBDHI", "LBXHIVC","LBXHIV1","LBXHIV2","LBXHNAT"),
-  HEPC = c("LBDHCI","LBXHCR"),
-  HEPBD = c("LBDHBG"),
-  SMQRTU = c("SMDANY"),
-  RXQ_RX = c("RXDUSE","RXDCOUNT","RXDDRUG","RXDDRGID")
+  DIQ = c("DIQ010","DIQ050","DID070","DIQ160","DIQ175A")
+  # GLU = c("LBXGLU"), # L10AM
+  # GHB = c("LBXGH"), # L10
+  # HIV = c("LBDHI", "LBXHIVC","LBXHIV1","LBXHIV2","LBXHNAT"), # HIV, missing LBXHIVC","LBXHIV1","LBXHIV2","LBXHNAT
+  # HEPC = c("LBDHCI","LBXHCR"), # missing HCI
+  #HEPBD = c("LBDHBG"),
+  # SMQMEC = c("SMDANY"), # originally SMQRTU
+  # RXQ_RX = c("RXDUSE","RXDCOUNT","RXDDRUG","RXDDRGID")
 )
 
 # Variables that lead to duplicate SEQN identifiers and must be nested
@@ -204,8 +204,8 @@ if (2001 %in% cycle_years_input) {
 }
 
 if (1999 %in% cycle_years_input) {
-  to_rm <- c(to_rm, "BIOPRO_A", "ALB_CR", "KIQ_U", "GLU", "GHB", "HIV", "HEPC", "SMQRTU")
-  to_add <- c(to_add, "LAB18", "LAB16", "KIQ", "LAB10AM", "LAB10", "LAB03", "LAB02", "SMQMEC")
+  to_rm <- c(to_rm, "BIOPRO_A", "ALB_CR", "KIQ_U", "GLU", "GHB", "HIV", "HEPC", "HEPBD", "SMQRTU")
+  to_add <- c(to_add, "LAB18", "LAB16", "KIQ", "LAB10AM", "LAB10", "LAB03", "LAB02", "LAB02", "SMQMEC")
 }
 
 if (2003 %in% cycle_years_input) {
@@ -283,13 +283,16 @@ raw_data$LAB18$LBXSCR <- 1.013 * raw_data$LAB18$LBXSCR + 0.147
 ```
 
 ```{r join_data_tables, cache = TRUE}
+# rename LAB 16 to L16 for 1999 (ALB_CR)
+names(raw_data)[names(raw_data) == "LAB16"] <- "L16"
+
 # Kept variables and their descriptions
 joined_data <- list()
 # Loop through all years and all variables
 for (y in 1:length(cycle_years)) {
   for (var in names(keep_var)) {
     letter <- names(cycle_years)[y]
-    print(paste("LETTER:", letter))
+    print(paste("VAR and LETTER:", var, letter))
     var_names <- c("SEQN", keep_var[[var]])
     varletter <- sprintf("%s_%s", var, letter)
     # If in the `to_rm` list, replace with its `to_add` counterpart
@@ -362,10 +365,10 @@ cols_match <- sapply(joined_data, function(x) {
 
 ```{r bind_data_tables, cache = TRUE}
 # 2017-2018 United States population (320,842,721)
-us_pop_2018 <- joined_data$`2017-2018` %>% 
+us_pop_2002 <- joined_data$`2001-2002` %>% 
   select(WTINT2YR) %>% unlist %>% as.numeric %>% sum
 # 2017-2018 U.S. Black population (38,925,825)
-black_pop_2018 <- 38925825
+black_pop_2002 <- 20400000 
 
 if (all(cols_match)) {
   all_data <- lapply(joined_data, function(dat) {
@@ -399,18 +402,18 @@ if (all(cols_match)) {
         dat[to_change, "WTSCR2YR"] <- dat[to_change, "WTSCR2YR"] * as.numeric(row["W"])
     }
     # Scale weights to 2017-2018 CPS total population
-    dat$WTSCR2YR = dat$WTSCR2YR * us_pop_2018 / sum(dat$WTSCR2YR[!dat$MISSING])
+    dat$WTSCR2YR = dat$WTSCR2YR * us_pop_2002 / sum(dat$WTSCR2YR[!dat$MISSING])
     # Scale Black weights to 2017-2018 CPS Black population
     nm_black <- dat$IS_BLACK & !dat$MISSING
     nm_nonblack <- !dat$IS_BLACK & !dat$MISSING
     obs_black_pop <- dat$WTSCR2YR[nm_black] %>% sum
-    dat$WTSCR2YR[nm_black] <- dat$WTSCR2YR[nm_black] * black_pop_2018/obs_black_pop
+    dat$WTSCR2YR[nm_black] <- dat$WTSCR2YR[nm_black] * black_pop_2002/obs_black_pop
     # Scale other weights to 2017-2018 CPS total population
     obs_total_pop <- dat$WTSCR2YR[!dat$MISSING] %>% as.numeric %>% sum
     dat$WTSCR2YR[nm_nonblack] <- dat$WTSCR2YR[nm_nonblack] * 
-                              (us_pop_2018 - black_pop_2018) / 
-                              (obs_total_pop - black_pop_2018)
-    dat$WTSCR18YR = dat$WTSCR2YR / (length(cycle_years_input)/2)
+                              (us_pop_2002 - black_pop_2002) / 
+                              (obs_total_pop - black_pop_2002)
+    dat$WTSCR4YR = dat$WTSCR2YR / (length(cycle_years_input)/2)
     return(dat)
   }) %>% bind_rows(.id = "Cycle_Year")
   # Validation of population sizes
@@ -458,6 +461,9 @@ add_demo_info <- function(dat) {
   dat$URXUMA <- replace(dat$URXUMA, 
     dat$URXUMA %in% c("Below Limit of Detection", 
                       "At or below detection limit fill value"), NA)
+  dat$URXUMA <- as.numeric(dat$URXUMA)
+  dat$URXUCR <- as.numeric(dat$URXUCR)
+  
   # Convert numeric cols to numeric type
   for (col in num_cols) {
     if (col %in% colnames(dat))
@@ -467,9 +473,9 @@ add_demo_info <- function(dat) {
   # Convert age to numeric; set combined weights
   # Set IS_FEMALE from gender; set IS_BLACK from race
   dat <- dat %>%
-    mutate(SMOKING = na_to_No(SMDANY)=="Yes") %>% 
-    mutate(RXDCOUNT = RXDCOUNT %>% na_to_F(alt=0) %>% as.integer) %>%
-    mutate(albuminuria = 100*URXUMA/URXUCR > alb_cr_ratio_threshold) %>%
+    # mutate(SMOKING = na_to_No(SMDANY)=="Yes") %>% 
+    # mutate(RXDCOUNT = RXDCOUNT %>% na_to_F(alt=0) %>% as.integer) %>%
+    mutate(albuminuria = (100*URXUMA/URXUCR) > alb_cr_ratio_threshold) %>%
     mutate(albuminuria = albuminuria %>% na_to_F) %>% 
     mutate(medicare = RIDAGEYR >= 65 | 
                       na_to_No(HIQ031B) == "Yes" | 
@@ -486,10 +492,10 @@ dat <- add_demo_info(dat_minus_missing)
 #amc_frac <- 1600000/us_pop_2018
 black_adult_pop <- dat %>% 
   filter(RIDRETH1 == "Non-Hispanic Black") %>%
-  select(WTSCR18YR) %>% unlist %>% as.numeric %>% sum
+  select(WTSCR4YR) %>% unlist %>% as.numeric %>% sum
 black_adult_pop_recent <- dat %>% 
   filter(RIDRETH1 == "Non-Hispanic Black") %>%
-  filter(Cycle_Year == "2017-2018") %>%
+  filter(Cycle_Year == "2001-2002") %>%
   select(WTSCR2YR) %>% unlist %>% as.numeric %>% sum
 amc_frac <- 100000/black_adult_pop
 amc_frac_recent <- 100000/black_adult_pop_recent
@@ -807,7 +813,7 @@ dat <- add_tbl_info(dat)
 # Establish survey design object
 des <- svydesign(id = ~SDMVPSU, 
                  strata = ~SDMVSTRA, 
-                 weights = ~WTSCR18YR, 
+                 weights = ~WTSCR4YR, 
                  nest = TRUE, data = dat)
 dat$no_weight <- 1
 des_unweighted <- svydesign(id = ~SDMVPSU, 
