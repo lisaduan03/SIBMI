@@ -1,19 +1,20 @@
 ---
-title: "Clinical Implications for Black Americans of Removing Race from CKD-EPI Estimates of Kidney Function"
-date: "`r format(Sys.time(), '%B %d, %Y')`"
-author: 
-- James A. Diao$^{1-3}$
-- Gloria J. Wu$^{1-2}$
-- Jason K. Wang$^{1-3}$
+title: "Clinical Implications for Black Americans of Removing Race from CKD-EPI Estimates
+  of Kidney Function"
+author:
+- "James A. Diao$^{1-3}$"
+- "Gloria J. Wu$^{1-2}$"
+- "Jason K. Wang$^{1-3}$"
 - Herman A. Taylor$^{4}$
 - John K. Tucker$^{5}$
 - Neil R. Powe$^{6}$
-- Isaac S. Kohane$^{1-2}$
-- Arjun K. Manrai$^{1-2}$
-output: 
-  pdf_document
-header-includes:
-  - \usepackage{caption}
+- "Isaac S. Kohane$^{1-2}$"
+- "Arjun K. Manrai$^{1-2}$"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    df_print: paged
+header-includes: \usepackage{caption}
 ---
 
 $^1$ Computational Health Informatics Program, Boston Children’s Hospital, Boston, MA  
