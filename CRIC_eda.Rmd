@@ -1,0 +1,136 @@
+---
+title: "CRIC_eda"
+output: html_document
+date: "2024-07-12"
+---
+
+```{r setup, include=FALSE}
+library(haven)
+library(dplyr)
+library(tableone)
+library(tableHTML)
+library(webshot)
+
+
+# no idea what this does
+knitr::opts_chunk$set(echo = TRUE)()
+```
+
+```{r}
+# 3612 rows
+manuscript_data <- read_sas("../CRIC_V11/Data/Ancillary_Data/MS004/ms004_analytical_data_final.sas7bdat")
+
+# filtering for iGFR_baseline, should be 1423
+manuscript_filtered <- manuscript_data %>% filter(iGFR_baseline == 1)
+```
+
+```{r}
+# 88731 rows (includes longitudinal)
+visit_level_data <- read_sas("../CRIC_V11/Data/Phase1andPhase3/Derived_Data/visitlevel.sas7bdat")
+
+# for each unique, check if at least one row has "VNUM"
+# Group by PID and check if any row has VNUM == 3
+pids_without_vnum_3 <- visit_level_data %>%
+  group_by(PID) %>%
+  summarize(has_vnum_3 = any(VNUM == 3)) %>%
+  filter(!has_vnum_3) %>%
+  pull(PID)
+
+# Print the PIDs that do not have any VNUM == 3
+print(pids_without_vnum_3)
+
+# since each PID has a VNUM 3, filter 
+visit_level_first_visit <- visit_level_data %>% filter(VNUM == 3)
+
+# see values of ADJUSTED_IGFR in visit_level_filtered
+adjusted_igfr_values <- visit_level_first_visit %>% select(ADJUSTED_IGFR)
+print(adjusted_igfr_values)
+
+# keep only non NA columns
+visit_level_filtered = visit_level_first_visit %>% filter(!is.na(ADJUSTED_IGFR))
+
+```
+
+```{r}
+# A few sanity checks 
+
+# 1) find PIDS in one but not the other 
+# get list of PIDs that dont match
+pids_visit_level <- visit_level_filtered %>% pull(PID)
+pids_manuscript <- manuscript_filtered %>% pull(PID)
+
+# Find the PIDs that are in visit_level_filtered but not in manuscript_filtered
+pids_only_in_visit_level <- setdiff(pids_visit_level, pids_manuscript)
+
+# Find the PIDs that are in manuscript_filtered but not in visit_level_filtered
+pids_only_in_manuscript <- setdiff(pids_manuscript, pids_visit_level)
+
+# 2) why is 05010011 in manuscript but not data: because NA value in visit_level data. May have been a mistake in 2009 that was subsequently fixed? 
+specific_row <- visit_level_first_visit %>% filter(PID == '05010011')
+print(specific_row$ADJUSTED_IGFR)
+
+# 3) check that some blood biomarker values match up between manuscript_filtered and visit_level_filtered 
+joined_data <- visit_level_filtered %>%
+  inner_join(manuscript_filtered, by = "PID", suffix = c("_visit", "_manuscript"))
+
+# Check if TG and TC columns match
+mismatched_tg <- joined_data %>% filter(TG_visit != TG_manuscript)
+mismatched_tc <- joined_data %>% filter(TC_visit != TC_manuscript)
+
+# Print the PIDs with mismatched TG and TC values
+print("PIDs with mismatched TG values:")
+print(mismatched_tg$PID)
+
+print("PIDs with mismatched TC values:")
+print(mismatched_tc$PID)
+```
+
+```{r}
+# Now, proceed with EDA of visit_level_filtered, which has 1432 pts with IGFR
+
+```
+
+
+```{r}
+# Now, proceed with EDA of visit_level_filtered, which has 1432 pts with IGFR
+
+# Random GPT 4 code 
+# Participant characteristics 
+
+df <- data.frame(
+  PID = sample(1:1000, 100, replace = TRUE),
+  cohort = sample(c("GENOA", "ECAC", "ALTOLD", "CRIC"), 100, replace = TRUE),
+  age = sample(19:86, 100, replace = TRUE),
+  race = sample(c("Non-Hispanic White", "Non-Hispanic Black", "Hispanic", "Other"), 100, replace = TRUE),
+  sex = sample(c("Female", "Male"), 100, replace = TRUE),
+  CVD = sample(c(0, 1), 100, replace = TRUE),
+  diabetes = sample(c(0, 1), 100, replace = TRUE),
+  hypertension = sample(c(0, 1), 100, replace = TRUE),
+  smoker = sample(c(0, 1), 100, replace = TRUE),
+  height = runif(100, 122, 211),
+  weight = runif(100, 40, 195),
+  BSA = runif(100, 1.39, 3.4),
+  BMI = runif(100, 15, 71),
+  UACR = runif(100, 35.4, 424.3),
+  serum_creatinine = runif(100, 0.4, 8.4),
+  cystatin_C = runif(100, 35.4, 424.3),
+  mGFR = runif(100, 6, 210),
+  eGFR = runif(100, 6, 210)
+)
+
+# Define the variables you want to include in the table
+vars <- c("age", "race", "sex", "CVD", "diabetes", "hypertension", "smoker", 
+          "height", "weight", "BSA", "BMI", "UACR", "serum_creatinine", 
+          "cystatin_C", "mGFR", "eGFR")
+
+# Define the factor variables
+factorVars <- c("race", "sex", "CVD", "diabetes", "hypertension", "smoker")
+
+# Create the TableOne object
+table1 <- CreateTableOne(vars = vars, strata = "cohort", data = df, factorVars = factorVars)
+
+# Print the table with formatting
+print(table1, showAllLevels = TRUE, quote = TRUE, noSpaces = TRUE)
+
+```
+
