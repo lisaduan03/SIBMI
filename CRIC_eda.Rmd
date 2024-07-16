@@ -16,7 +16,9 @@ library(webshot)
 knitr::opts_chunk$set(echo = TRUE)()
 ```
 
-```{r}
+```{r Reading in data from manuscript}
+# https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2723966/. Fewer patients, perhaps becaue 2009 
+
 # 3612 rows
 manuscript_data <- read_sas("../CRIC_V11/Data/Ancillary_Data/MS004/ms004_analytical_data_final.sas7bdat")
 
@@ -24,7 +26,7 @@ manuscript_data <- read_sas("../CRIC_V11/Data/Ancillary_Data/MS004/ms004_analyti
 manuscript_filtered <- manuscript_data %>% filter(iGFR_baseline == 1)
 ```
 
-```{r}
+```{r Reading in data from visit level, most comprehensive, filtering}
 # 88731 rows (includes longitudinal)
 visit_level_data <- read_sas("../CRIC_V11/Data/Phase1andPhase3/Derived_Data/visitlevel.sas7bdat")
 
@@ -42,16 +44,21 @@ print(pids_without_vnum_3)
 # since each PID has a VNUM 3, filter 
 visit_level_first_visit <- visit_level_data %>% filter(VNUM == 3)
 
-# see values of ADJUSTED_IGFR in visit_level_filtered
-adjusted_igfr_values <- visit_level_first_visit %>% select(ADJUSTED_IGFR)
-print(adjusted_igfr_values)
+# filter for when there is iGFR value
+visit_level_filtered <- visit_level_first_visit %>% filter(!is.na(ADJUSTED_IGFR))
 
-# keep only non NA columns
-visit_level_filtered = visit_level_first_visit %>% filter(!is.na(ADJUSTED_IGFR))
+# join with RACE_ETHNICITY_CAT2 from person level data
+person_level_data <- read_sas("../CRIC_V11/Data/Phase1andPhase3/Derived_Data/personlevel.sas7bdat") 
+
+visit_level_filtered <- visit_level_filtered %>%
+  left_join(person_level_data %>% 
+              select(PID, RACE_ETHNICITY_CAT2, SEX), 
+            by = "PID")
+
 
 ```
 
-```{r}
+```{r Data preprocessing sanity checks }
 # A few sanity checks 
 
 # 1) find PIDS in one but not the other 
@@ -85,52 +92,264 @@ print("PIDs with mismatched TC values:")
 print(mismatched_tc$PID)
 ```
 
-```{r}
+```{r Table 1: Participant Characteristics}
 # Now, proceed with EDA of visit_level_filtered, which has 1432 pts with IGFR
+data = visit_level_filtered 
 
-```
+data$RACE_ETHNICITY_CAT2 <- 
+  factor(data$RACE_ETHNICITY_CAT2, levels=c(1,2,3,4),
+         labels=c("NHW", "NHB", "Hispanic", "Other"))
 
+data$SEX <- 
+  factor(data$SEX, levels=c(1,2),
+         labels=c("Male", "Female"))
 
-```{r}
-# Now, proceed with EDA of visit_level_filtered, which has 1432 pts with IGFR
-
-# Random GPT 4 code 
-# Participant characteristics 
-
-df <- data.frame(
-  PID = sample(1:1000, 100, replace = TRUE),
-  cohort = sample(c("GENOA", "ECAC", "ALTOLD", "CRIC"), 100, replace = TRUE),
-  age = sample(19:86, 100, replace = TRUE),
-  race = sample(c("Non-Hispanic White", "Non-Hispanic Black", "Hispanic", "Other"), 100, replace = TRUE),
-  sex = sample(c("Female", "Male"), 100, replace = TRUE),
-  CVD = sample(c(0, 1), 100, replace = TRUE),
-  diabetes = sample(c(0, 1), 100, replace = TRUE),
-  hypertension = sample(c(0, 1), 100, replace = TRUE),
-  smoker = sample(c(0, 1), 100, replace = TRUE),
-  height = runif(100, 122, 211),
-  weight = runif(100, 40, 195),
-  BSA = runif(100, 1.39, 3.4),
-  BMI = runif(100, 15, 71),
-  UACR = runif(100, 35.4, 424.3),
-  serum_creatinine = runif(100, 0.4, 8.4),
-  cystatin_C = runif(100, 35.4, 424.3),
-  mGFR = runif(100, 6, 210),
-  eGFR = runif(100, 6, 210)
+data$DIABETES <- factor(
+  data$DIABETES,
+  levels = c(1, 0),
+  labels = c("Diabetes", "No Diabetes")
 )
 
-# Define the variables you want to include in the table
-vars <- c("age", "race", "sex", "CVD", "diabetes", "hypertension", "smoker", 
-          "height", "weight", "BSA", "BMI", "UACR", "serum_creatinine", 
-          "cystatin_C", "mGFR", "eGFR")
+# Define the ranges for EGFR_CKD_EPI
+data$EGFR_CATEGORY <- cut(
+  data$EGFR_CKD_EPI,
+  breaks = c(-Inf, 15, 30, 45, 60, 90, 120, Inf),
+  labels = c("<15", "15-29", "30-44", "45-59", "60-89", "90-119", ">120"),
+  include.lowest = TRUE,
+  right = TRUE
+)
 
-# Define the factor variables
-factorVars <- c("race", "sex", "CVD", "diabetes", "hypertension", "smoker")
+table1(~ AGE_INTEGER + RACE_ETHNICITY_CAT2 + SEX + DIABETES + HYPERTENSION + EGFR_CATEGORY, data = data)
 
-# Create the TableOne object
-table1 <- CreateTableOne(vars = vars, strata = "cohort", data = df, factorVars = factorVars)
 
-# Print the table with formatting
-print(table1, showAllLevels = TRUE, quote = TRUE, noSpaces = TRUE)
+
 
 ```
+
+
+```{r EDA plots}
+# 1) EGFR and iGFR by race
+iGFR_race <- data.frame(
+  iGFR = data$IGFR,
+  iGFR_adjusted = data$ADJUSTED_IGFR,
+  eGFR_CKDEPI = data$EGFR_CKD_EPI,
+  RACE_ETHNICITY_CAT2 = data$RACE_ETHNICITY_CAT2
+)
+
+
+ggplot(iGFR_race, aes(x = iGFR)) +
+  geom_density(aes(fill = "iGFR"), alpha = 0.5, color = "red") +
+  geom_density(data = iGFR_race, aes(x = eGFR_CKDEPI, fill = "eGFR"), alpha = 0.5, color = "blue") +
+  facet_wrap(~ RACE_ETHNICITY_CAT2, scales = "fixed", ncol = 2) +  # Facet by RACE_ETHNICITY_CAT2 with fixed scales
+  labs(x = "GFR", y = "Density", title = "Overlay of iGFR and eGFR Distributions by Race") +
+  scale_fill_manual(values = c("iGFR" = "red", "eGFR" = "blue")) +  # Manual fill colors for legend
+  theme_minimal()
+
+
+# 2) scatterplot of IGFR and BMI
+iGFR_BMI <- data.frame(
+  iGFR = data$IGFR,
+  BMI = data$BMI
+)
+
+p <- ggplot(iGFR_BMI, aes(x = BMI, y = iGFR)) +
+  geom_point(color = "blue") +  # Scatterplot points in blue
+  labs(x = "BMI", y = "iGFR", title = "Scatter Plot of iGFR vs BMI") +
+  theme_minimal() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +  # Add linear regression line
+  stat_poly_eq(
+    aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+    formula = y ~ x, 
+    parse = TRUE,
+    label.x = "right", 
+    label.y = 100
+  ) +  # Add R-squared value on the side
+  theme(
+    plot.margin = unit(c(1, 5, 1, 1), "cm")  # Adjust the right margin for the label
+  )
+
+print(p)
+correlation_coef <- cor(iGFR_BMI$BMI, iGFR_BMI$iGFR)
+print(correlation_coef)
+```
+
+```{r Figure 1: Quantile Regression}
+# Quantile regression for specific quantiles at given eGFR values 
+# FIX legend!!!!
+quantiles <- c(0.025, 0.10, 0.25, 0.50, 0.75, 0.90, 0.975)
+models <- lapply(quantiles, function(tau) {
+  rq(IGFR ~ EGFR_CKD_EPI, data = data, tau = tau)
+})
+
+# Specified eGFR values
+eGFR_values <- c(15, 30, 45, 60, 90)
+
+# Create a data frame to store the predicted mGFR values
+predicted_mGFR <- data.frame(
+  eGFR = rep(eGFR_values, each = length(quantiles)),
+  quantile = factor(rep(quantiles, times = length(eGFR_values))),
+  mGFR = NA
+)
+
+# Predict mGFR values for each quantile regression model and eGFR value
+for (i in seq_along(models)) {
+  for (j in seq_along(eGFR_values)) {
+    predicted_mGFR$mGFR[(j - 1) * length(quantiles) + i] <- predict(models[[i]], newdata = data.frame(EGFR_CKD_EPI = eGFR_values[j]))
+  }
+}
+
+# Print out the predicted values to check for issues
+print(predicted_mGFR)
+
+# Remove rows with missing or extreme values
+predicted_mGFR <- predicted_mGFR %>%
+  filter(!is.na(mGFR) & mGFR >= 0 & mGFR <= 150)
+
+# Extract the 0.025 and 0.975 quantiles for the vertical lines
+quantile_025 <- predicted_mGFR %>% filter(quantile == 0.025)
+quantile_975 <- predicted_mGFR %>% filter(quantile == 0.975)
+
+# Define the shapes and colors for the quantiles
+shape_map <- c("0.025" = 3, "0.1" = 17, "0.25" = 16, "0.5" = 15, "0.75" = 16, "0.9" = 17, "0.975" = 3)
+color_map <- c("0.025" = "red", "0.1" = "orange", "0.25" = "green", "0.5" = "black", "0.75" = "green", "0.9" = "orange", "0.975" = "red")
+
+# Plot the results
+p <- ggplot(predicted_mGFR, aes(x = eGFR, y = mGFR)) +
+  geom_point(aes(shape = quantile, color = quantile), size = 3) +
+  scale_shape_manual(values = shape_map) +
+  scale_color_manual(values = color_map) +
+  scale_x_continuous(breaks = seq(0, 90, by = 15)) +
+  scale_y_continuous(limits = c(0, 150)) + 
+  labs(x = "eGFR (mL/min/1.73 m^2)", y = "mGFR (mL/min/1.73 m^2)", title = "Quantile Regression for mGFR vs eGFR") +
+  theme_minimal()
+
+# Add vertical lines connecting the 0.025 and 0.975 quantiles
+p <- p + geom_segment(data = quantile_025, aes(x = eGFR, xend = eGFR, y = mGFR, yend = quantile_975$mGFR), color = "red")
+
+# Add text labels for the values, color-coded and slightly shifted
+p <- p + geom_text(aes(label = round(mGFR, 1), color = quantile), 
+                   vjust = -1, hjust = 1, size = 3)
+
+# Add the legend
+legend_labels <- c(
+  "0.025" = "p2.5, p97.5",
+  "0.1" = "p10, p90",
+  "0.25" = "p25, p75",
+  "0.5" = "p50 (median)"
+)
+
+# Adjust the legend
+p <- p + theme(legend.position = "right") +
+  scale_color_manual(
+    name = "Quantiles",
+    values = color_map,
+    labels = legend_labels
+  ) +
+  scale_shape_manual(
+    name = "Quantiles",
+    values = shape_map,
+    labels = legend_labels
+  )
+
+print(p)
+```
+
+
+```{r Expanding Figure 1: PI as a function of eGFR, stratified by groups}
+
+fit_quantile_models <- function(data, demographic_var, demographic_col, eGFR_vals) {
+  # Subset data for the current demographic category
+  subset_data <- data[data[[demographic_col]] == demographic_var, ]
+  
+  # Fit quantile regression models
+  models <- lapply(quantiles, function(tau) {
+    rq(IGFR ~ EGFR_CKD_EPI, data = subset_data, tau = tau)
+  })
+  
+  # Predict mGFR values for each quantile regression model and specified eGFR values
+  predicted_PI <- sapply(eGFR_vals, function(eGFR_val) {
+    quantile_values <- sapply(models, function(model) {
+      predict(model, newdata = data.frame(EGFR_CKD_EPI = eGFR_val))
+    })
+    PI <- quantile_values[2] - quantile_values[1]
+    return(PI)
+  })
+  
+  # Return a dataframe with eGFR and PI values for the specified eGFR values
+  return(data.frame(eGFR = eGFR_vals, PI = predicted_PI, DEMOGRAPHIC_GROUP = demographic_var))
+}
+
+# Function to fit models for each demographic group and combine results
+get_PI_data <- function(data, demographic_col, eGFR_vals) {
+  demographic_categories <- unique(data[[demographic_col]])
+  PI_data <- lapply(demographic_categories, fit_quantile_models, data = data, demographic_col = demographic_col, eGFR_vals = eGFR_vals)
+  # Combine all results into a single dataframe
+  PI_data <- do.call(rbind, PI_data)
+  PI_data$DEMOGRAPHIC_GROUP <- factor(PI_data$DEMOGRAPHIC_GROUP)
+  return(PI_data)
+}
+
+# Define demographic column for stratification 
+demographic_col <- "AGE_CAT_1" # "AGE_CAT_1," "SEX," "RACE_ETHNICITY_CAT2"
+
+# Get PI data for the chosen demographic column
+PI_data <- get_PI_data(data, demographic_col, eGFR_values)
+
+# Plot the results
+p <- ggplot(PI_data, aes(x = eGFR, y = PI, color = DEMOGRAPHIC_GROUP)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = DEMOGRAPHIC_GROUP), linetype = "dashed") +
+  labs(x = "eGFR (mL/min/1.73 m^2)", y = "95% PI", 
+       title = "95% PI by eGFR and Age",
+       subtitle = "For a given eGFR, 95% of mGFRs range from 2.5th to 97.5th percentiles",
+       color = "Age") +
+  theme_minimal() +
+  scale_color_discrete(name = "Age") +
+  scale_x_continuous(breaks = seq(0, 120, by = 15))
+
+print(p)
+
+# Race
+# Define demographic column for stratification 
+demographic_col <- "RACE_ETHNICITY_CAT2" # "AGE_CAT_1," "SEX," "RACE_ETHNICITY_CAT2"
+
+# Get PI data for the chosen demographic column
+PI_data <- get_PI_data(data, demographic_col, eGFR_values)
+
+# Plot the results
+p <- ggplot(PI_data, aes(x = eGFR, y = PI, color = DEMOGRAPHIC_GROUP)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = DEMOGRAPHIC_GROUP), linetype = "dashed") +
+  labs(x = "eGFR (mL/min/1.73 m^2)", y = "95% PI", 
+       title = "95% PI by eGFR and Race",
+       subtitle = "For a given eGFR, 95% of mGFRs range from 2.5th to 97.5th percentiles",
+       color = "Race") +
+  theme_minimal() +
+  scale_color_discrete(name = "Race") +
+  scale_x_continuous(breaks = seq(0, 120, by = 15))
+
+print(p)
+
+# SEX
+demographic_col <- "SEX" # "AGE_CAT_1," "SEX," "RACE_ETHNICITY_CAT2"
+
+# Get PI data for the chosen demographic column
+PI_data <- get_PI_data(data, demographic_col, eGFR_values)
+
+# Plot the results
+p <- ggplot(PI_data, aes(x = eGFR, y = PI, color = DEMOGRAPHIC_GROUP)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = DEMOGRAPHIC_GROUP), linetype = "solid") +
+  labs(x = "eGFR (mL/min/1.73 m^2)", y = "95% PI", 
+       title = "95% PI by eGFR and Sex",
+       subtitle = "For a given eGFR, 95% of mGFRs range from 2.5th to 97.5th percentiles",
+       color = "Sex") +
+  theme_minimal() +
+  scale_color_discrete(name = "Sex") +
+  scale_x_continuous(breaks = seq(0, 120, by = 15))
+
+print(p)
+
+```
+
 
