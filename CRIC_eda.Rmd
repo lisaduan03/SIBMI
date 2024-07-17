@@ -118,9 +118,9 @@ get_CKD_EPI <- function(SCr, age, sex, race, capped = FALSE) {
   alpha <- ifelse(sex == "Female", -0.329, -0.411)
   kappa <- ifelse(sex == "Female", 0.7, 0.9)
   female_coef <- ifelse(sex == "Female", 1.018, 1)
-  black_coef <- ifelse(race == "NHB", 1.159, 1)
+  # black_coef <- ifelse(race == "NHB", 1.159, 1)
   lab_term <- 141 * pmin(SCr/kappa, 1)^alpha * pmax(SCr/kappa, 1)^(-1.209)
-  demographic_term <- 0.993^age * female_coef * black_coef
+  demographic_term <- 0.993^age * female_coef # * black_coef
   return(lab_term * demographic_term)
 }
 
@@ -167,6 +167,7 @@ create_plot_data <- function(data, demographic_col) {
     iGFR = data$IGFR,
     iGFR_adjusted = data$ADJUSTED_IGFR,
     eGFR_CKDEPI = data$EGFR_CKD_EPI,
+    eGFR_CKDEPI_norace = data$my_EGFR,
     DEMOGRAPHIC_GROUP = data[[demographic_col]]
   )
   return(plot_data)
@@ -181,9 +182,10 @@ plot_density <- function(data, demographic_col, title) {
   p <- ggplot(plot_data, aes(x = iGFR)) +
     geom_density(aes(fill = "iGFR"), alpha = 0.5, color = "red") +
     geom_density(data = plot_data, aes(x = eGFR_CKDEPI, fill = "eGFR"), alpha = 0.5, color = "blue") +
+    geom_density(data = plot_data, aes(x = eGFR_CKDEPI_norace, fill = "eGFR no race"), alpha = 0.5, color = "cyan") +
     facet_wrap(~ DEMOGRAPHIC_GROUP, scales = "fixed", ncol = 2) +  # Facet by DEMOGRAPHIC_GROUP with fixed scales
     labs(x = "GFR", y = "Density", title = title) +
-    scale_fill_manual(values = c("iGFR" = "red", "eGFR" = "blue")) +  # Manual fill colors for legend
+    scale_fill_manual(values = c("iGFR" = "red", "eGFR" = "blue", "eGFR no race" = "cyan")) +  # Manual fill colors for legend
     theme_minimal()
   
   print(p)
@@ -255,7 +257,7 @@ quantiles <- c(0.025, 0.10, 0.25, 0.50, 0.75, 0.90, 0.975)
 
 # https://www.rdocumentation.org/packages/quantreg/versions/2.0-2/topics/rq
 models <- lapply(quantiles, function(tau) {
-  rq(IGFR ~ EGFR_CKD_EPI, data = data, tau = tau) # rq= quantile regression. IGFR is dependent, EGFR_CDK_EPI is indepndent
+  rq(IGFR ~ my_EGFR, data = data, tau = tau) # rq= quantile regression. IGFR is dependent, EGFR_CDK_EPI is indepndent
 })
 
 # Specified eGFR values
@@ -271,7 +273,7 @@ predicted_mGFR <- data.frame(
 # Predict mGFR values for each quantile regression model and eGFR value
 for (i in seq_along(models)) {
   for (j in seq_along(eGFR_values)) {
-    predicted_mGFR$mGFR[(j - 1) * length(quantiles) + i] <- predict(models[[i]], newdata = data.frame(EGFR_CKD_EPI = eGFR_values[j]))
+    predicted_mGFR$mGFR[(j - 1) * length(quantiles) + i] <- predict(models[[i]], newdata = data.frame(my_EGFR = eGFR_values[j]))
   }
 }
 
@@ -293,7 +295,7 @@ p <- ggplot(predicted_mGFR, aes(x = eGFR, y = mGFR)) +
   scale_color_manual(values = color_map) +
   scale_x_continuous(breaks = seq(0, 90, by = 15)) +
   scale_y_continuous(limits = c(0, 150)) + 
-  labs(x = "eGFR (mL/min/1.73 m^2)", y = "mGFR (mL/min/1.73 m^2)", title = "Quantile Regression for mGFR vs eGFR") +
+  labs(x = "eGFR (mL/min/1.73 m^2)", y = "mGFR (mL/min/1.73 m^2)", title = "Quantile Regression for mGFR vs eGFR (no race)") +
   theme_minimal()
 
 # Add vertical lines connecting the 0.025 and 0.975 quantiles
@@ -339,14 +341,14 @@ fit_quantile_models <- function(data, demographic_var, demographic_col) {
   
   # Fit quantile regression models
   models <- lapply(quantiles, function(tau) {
-    rq(IGFR ~ EGFR_CKD_EPI, data = subset_data, tau = tau)
+    rq(IGFR ~ my_EGFR, data = subset_data, tau = tau)
   })
   
   # Predict mGFR values for each quantile regression model and unique eGFR values in subset data
-  eGFR_vals <- unique(subset_data$EGFR_CKD_EPI)
+  eGFR_vals <- unique(subset_data$my_EGFR)
   predicted_PI <- sapply(eGFR_vals, function(eGFR_val) {
     quantile_values <- sapply(models, function(model) {
-      predict(model, newdata = data.frame(EGFR_CKD_EPI = eGFR_val))
+      predict(model, newdata = data.frame(my_EGFR = eGFR_val))
     })
     PI <- quantile_values[2] - quantile_values[1]
     return(PI)
@@ -401,6 +403,77 @@ for (demographic_col in demographic_cols) {
   print(p)
 }
 
+# How does race change if we use CKD-EPI eqn with race? Same code but instead  of using my_EGFR, use EGFR_CKD_EPI
+fit_quantile_models <- function(data, demographic_var, demographic_col) {
+  # Subset data for the current demographic category
+  subset_data <- data[data[[demographic_col]] == demographic_var, ]
+  
+  # Fit quantile regression models
+  models <- lapply(quantiles, function(tau) {
+    rq(IGFR ~ EGFR_CKD_EPI, data = subset_data, tau = tau)
+  })
+  
+  # Predict mGFR values for each quantile regression model and unique eGFR values in subset data
+  eGFR_vals <- unique(subset_data$EGFR_CKD_EPI)
+  predicted_PI <- sapply(eGFR_vals, function(eGFR_val) {
+    quantile_values <- sapply(models, function(model) {
+      predict(model, newdata = data.frame(EGFR_CKD_EPI = eGFR_val))
+    })
+    PI <- quantile_values[2] - quantile_values[1]
+    return(PI)
+  })
+  
+  # Return a dataframe with eGFR and PI values for the unique eGFR values
+  return(data.frame(eGFR = eGFR_vals, PI = predicted_PI, DEMOGRAPHIC_GROUP = demographic_var))
+}
+
+# Function to fit models for each demographic group and combine results
+get_PI_data <- function(data, demographic_col) {
+  demographic_categories <- unique(data[[demographic_col]])
+  PI_data <- lapply(demographic_categories, fit_quantile_models, data = data, demographic_col = demographic_col)
+  # Combine all results into a single dataframe
+  PI_data <- do.call(rbind, PI_data)
+  PI_data$DEMOGRAPHIC_GROUP <- factor(PI_data$DEMOGRAPHIC_GROUP)
+  return(PI_data)
+}
+
+# Define a list of demographic columns to stratify by
+demographic_cols <- c("RACE_ETHNICITY_CAT2")
+
+# Loop over each demographic column and generate plots
+for (demographic_col in demographic_cols) {
+  # Get PI data for the chosen demographic column
+  PI_data <- get_PI_data(data, demographic_col)
+  
+  # storing mean for later 
+  avg_PI_data <- PI_data %>%
+    group_by(DEMOGRAPHIC_GROUP) %>%
+    summarize(AVG_PI = mean(PI),
+              CI_lower = mean(PI) - 1.96 * sd(PI) / sqrt(n()),  # 95% CI lower bound
+              CI_upper = mean(PI) + 1.96 * sd(PI) / sqrt(n()))  # 95% CI upper bound
+  summary_results[[demographic_col]] <- avg_PI_data
+  
+  # Generate a dynamic title and color label based on the demographic column
+  title <- paste("95% PI by eGFR and", gsub("_", " ", demographic_col), "WITH race")
+  color_label <- gsub("_", " ", demographic_col)
+  
+  # Plot the results
+  p <- ggplot(PI_data, aes(x = eGFR, y = PI, color = DEMOGRAPHIC_GROUP)) +
+    geom_point(size = 2) +
+    geom_line(aes(group = DEMOGRAPHIC_GROUP), linetype = "dashed") +
+    labs(x = "eGFR (mL/min/1.73 m^2)", y = "95% PI", 
+         title = title,
+         subtitle = "For a given eGFR, 95% of mGFRs range from 2.5th to 97.5th percentiles",
+         color = color_label) +
+    theme_minimal() +
+    scale_color_discrete(name = color_label) +
+    scale_x_continuous(breaks = seq(0, 120, by = 15))
+  
+  print(p)
+}
+
+
+
 ```
 
 ```{r Table 2: Bias and Inaccuracy of Estimating Equations}
@@ -420,14 +493,14 @@ quantiles <- c(0.025, 0.975)
 fit_quantile_models <- function(data) {
   # Fit quantile regression models
   models <- lapply(quantiles, function(tau) {
-    rq(IGFR ~ EGFR_CKD_EPI, data = data, tau = tau)
+    rq(IGFR ~ my_EGFR, data = data, tau = tau)
   })
   
   # Predict mGFR values for each quantile regression model and unique eGFR values
-  eGFR_vals <- unique(data$EGFR_CKD_EPI)
+  eGFR_vals <- unique(data$my_EGFR)
   predicted_PI <- sapply(eGFR_vals, function(eGFR_val) {
     quantile_values <- sapply(models, function(model) {
-      predict(model, newdata = data.frame(EGFR_CKD_EPI = eGFR_val))
+      predict(model, newdata = data.frame(my_EGFR = eGFR_val))
     })
     PI <- quantile_values[2] - quantile_values[1]
     return(PI)
@@ -472,6 +545,3 @@ print(final_table_with_overall)
 
 colnames
 ```
-
-
-
