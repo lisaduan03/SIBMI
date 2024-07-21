@@ -1,0 +1,443 @@
+---
+title: "combining_CRIC_and_NHANES"
+output: html_document
+date: "2024-07-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(haven)
+library(dplyr)
+library(tableone)
+library(tableHTML)
+library(webshot)
+library(ggpmisc)
+library(quantreg)
+library(RNHANES)
+library(ggplot2)
+library(gridExtra)
+setwd("/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/eGFR-Race-master")
+
+```
+
+# Reading and preprocessing CRIC and NHANES data
+```{r Reading in CRIC data}
+# 88731 rows (includes longitudinal)
+visit_level_data <- read_sas("/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/CRIC_V11/Data/Phase1andPhase3/Derived_Data/visitlevel.sas7bdat")
+
+# for each unique, check if at least one row has "VNUM"
+# Group by PID and check if any row has VNUM == 3
+pids_without_vnum_3 <- visit_level_data %>%
+  group_by(PID) %>%
+  summarize(has_vnum_3 = any(VNUM == 3)) %>%
+  filter(!has_vnum_3) %>%
+  pull(PID)
+
+# Print the PIDs that do not have any VNUM == 3
+print(pids_without_vnum_3)
+
+# since each PID has a VNUM 3, filter 
+visit_level_first_visit <- visit_level_data %>% filter(VNUM == 3)
+
+# filter for when there is iGFR value
+visit_level_filtered <- visit_level_first_visit %>% filter(!is.na(ADJUSTED_IGFR))
+
+# join with RACE_ETHNICITY_CAT2 from person level data
+person_level_data <- read_sas("/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/CRIC_V11/Data/Phase1andPhase3/Derived_Data/personlevel.sas7bdat") 
+
+visit_level_filtered <- visit_level_filtered %>%
+  left_join(person_level_data %>% 
+              select(PID, RACE_ETHNICITY_CAT2, SEX, INCOME_CAT_1), 
+            by = "PID")
+```
+
+```{r filtering CRIC for variables of interest}
+columns_to_select <- c("PID", "TG", "TC", "HDL", "LDL", "ALANINE_AMINOTRANSFE", "SERUM_ALBUMIN", "ALKALINE_PHOSPHATASE", "ASPARTATE_AMINOTRANS", "CALCIUM", "CHLORIDE", "GLUCOSE", "HEMOGLOBIN_A1C", "POTASSIUM", "SODIUM", "TOTAL_BILIRUBIN", "TOTAL_PROTEIN", "SERUM_UREA_NITROGEN", "MCH", "MCV", "RBC", "CREATININE_SERUM", "WBC", "CBCHEMOGLOBIN", "HEMATOCRIT", "PLATELETS",  "EOSINOPHILS", "BASOPHILS", "NEUTROPHILS", "MONOCYTES", "LYMPHOCYTES")
+
+CRIC_data <- visit_level_filtered %>% select(all_of(columns_to_select))
+
+head(CRIC_data)
+
+
+```
+
+
+```{r NHANES_data_params}
+# Which years to include
+cycle_years_input <- 2011:2018
+
+# Which variables to keep from each data file
+keep_var <- list(
+  BIOPRO = c("LBXSTR", "LBXSCH", "LBXSATSI", "LBXSAL", "LBXSAPSI", "LBXSASSI",
+           "LBXSCA", "LBXSCLSI", "LBXSGL", "LBXSKSI", "LBXSNASI", "LBXSTB",
+           "LBXSTP", "LBXSBU", "LBXSCR"),
+  CBC = c("LBXMCHSI", "LBXMCVSI", "LBXRBCSI", "LBXWBCSI", "LBXHGB",
+        "LBXHCT", "LBXPLTSI", "LBDEONO", "LBDBANO", "LBDNENO", "LBDMONO", "LBDLYMNO"),
+  HDL = c("LBDHDD"),
+  GHB = c("LBXGH"),
+  TRIGLY = c("LBDLDL")
+)
+
+# `to_rm` and `to_add` are paired vectors that account for naming exceptions
+to_rm <- c("GLU_J")
+to_add <- c("DEMO_J")
+
+if (2001 %in% cycle_years_input) {
+  to_rm <- c(to_rm, "BIOPRO_B","ALB_CR_B","GHB_B","SMQRTU_B",
+             "HEPC_B","HEPBD_B","HIV_B","GLU_B")#,"TRIGLY_B")
+  to_add <- c(to_add, "L40_B","L16_B","L10_B","SMQMEC_B",
+              "L02_B","L02_B","L03_B","L10AM_B")#,"L13AM_B")
+}
+
+if (1999 %in% cycle_years_input) {
+  to_rm <- c(to_rm, "BIOPRO_A", "ALB_CR", "KIQ_U", "GLU", "GHB", "HIV", "HEPC", "HEPBD", "SMQRTU")
+  to_add <- c(to_add, "LAB18", "LAB16", "KIQ", "LAB10AM", "LAB10", "LAB03", "LAB02", "LAB02", "SMQMEC")
+}
+
+if (2003 %in% cycle_years_input) {
+  to_rm <- c(to_rm, "BIOPRO_C","ALB_CR_C","GHB_C","SMQRTU_C",
+             "HEPC_C","HEPBD_C","HIV_C","GLU_C")#,"TRIGLY_C")
+  to_add <- c(to_add, "L40_C","L16_C","L10_C","SMQMEC_C",
+              "L02_C","L02_C","L03_C","L10AM_C")#,"L13AM_C")
+}
+
+# columns to convert to numeric after loading
+num_cols <- c("SEQN","RIDAGEYR","SDMVPSU","SDMVSTRA",
+              keep_var$BIOPRO, keep_var$BMX, keep_var$GLU, 
+              keep_var$ALB_CR, keep_var$GHB, keep_var$BPX)
+# Age columns across many cancer types to collapse 
+# into a single "cancer age" column after loading
+cancer_age_cols <- c(keep_var$MCQ[grep("240", keep_var$MCQ)])
+```
+
+```{r download, cache = TRUE}
+# Maps years to letter codes
+code_map <- setNames(LETTERS, seq(1999, 2050, 2))
+# Converts vector of years into paired cycles
+cycle_years <- paste(cycle_years_input[c(T,F)],
+                     cycle_years_input[c(F,T)],
+                     sep="-") %>%
+  setNames(code_map[as.character(cycle_years_input)[c(T,F)]])
+# Add letter codes to data file names
+data_file_list <- sapply(names(keep_var), function(x)
+  sprintf("%s_%s", x, names(cycle_years))) %>% as.vector
+# Replace variables from `to_rm` with those from `to_add`
+for(i in 1:length(to_rm)) {
+  data_file_list[data_file_list == to_rm[i]] <- to_add[i]
+}
+# to get 1999-2000 data
+data_file_list <- gsub("_A", "", data_file_list)
+
+# Download and merge NHANES data using `RNHANES` package
+raw_data <- nhanes_load_data(data_file_list, year = cycle_years,
+                             destination = "nhanes_data", cache = TRUE,
+                             demographics = FALSE, recode_data = FALSE)
+# Correction for serum creatinine in 2005-2006 as per BIOPRO_D analytic notes
+# https://wwwn.cdc.gov/Nchs/Nhanes/2005-2006/BIOPRO_D.htm
+raw_data$BIOPRO_D$LBXSCR <- 0.978 * raw_data$BIOPRO_D$LBXSCR - 0.016
+
+# correction for serum creatinine in 1999-2001
+# https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB18.htm#LBXSCR
+raw_data$LAB18$LBXSCR <- 1.013 * raw_data$LAB18$LBXSCR + 0.147
+```
+
+
+```{r join_data_tables, cache = TRUE}
+# rename LAB 16 to L16 for 1999 (ALB_CR)
+names(raw_data)[names(raw_data) == "LAB16"] <- "L16"
+# Kept variables and their descriptions
+joined_data <- list()
+# Loop through all years and all variables
+for (y in 1:length(cycle_years)) {
+  for (var in names(keep_var)) {
+    letter <- names(cycle_years)[y]
+    print(paste("VAR and LETTER:", var, letter))
+    var_names <- c("SEQN", keep_var[[var]])
+    varletter <- sprintf("%s_%s", var, letter)
+    # If in the `to_rm` list, replace with its `to_add` counterpart
+    if (varletter %in% to_rm) {
+      new_var <- unlist(to_add[which(to_rm == varletter)] %>% 
+        strsplit("_"))[1] # Counterpart in to_add
+      if (new_var == "DEMO") { # Indicator that this is a direct removal
+        letter <- names(cycle_years)[y-1] # Go to previous letter
+      } else {
+        var <- new_var 
+      }
+    }
+    # only for 2001-2002
+    if (letter == "B") {
+      file_name <- sprintf("%s_%s", var, letter)
+    } else {
+      file_name <- varletter
+    }
+    # Collect individual data file from combined file
+    df <- raw_data[[file_name]]
+    print(paste("Processing file:", file_name))
+
+    # Fix column name anomalies in earlier years (esp. 2001-2004)
+    if ("LBDSCR" %in% colnames(df)) {
+      df <- df %>% mutate(LBXSCR = LBDSCR) %>% mutate(LBXSCRSI = LBDSCRSI)
+    }
+    if ("SMQ680" %in% colnames(df)) {
+      df <- df %>% mutate(SMDANY = SMQ680) 
+    }
+    if ("LBDHCV" %in% colnames(df)) {
+      df <- df %>% mutate(LBDHCI = LBDHCV) 
+    }
+    # Define columns for the missing variables and fill them with NA
+    var_absent <- setdiff(var_names, colnames(df))
+    df[, var_absent] <- NA
+    
+    df <- df %>% 
+      select(all_of(var_names)) %>% 
+      mutate(SEQN = as.character(SEQN))
+    # Nest all variables that generate extra rows
+    if (var == "RXQ_RX") {
+      df <- df %>% chop(rx_multiples[rx_multiples %in% keep_var$RXQ_RX])
+    }
+    if (any(table(df$SEQN) != 1))
+      stop("Multiple lines per respondent")
+    # If it's DEMO, save to joined_data. 
+    # Otherwise, left-join with the previous/existing table
+    if (var != names(keep_var)[1]) {
+      # Ensure SEQN is present in both data frames before merging
+      if ("SEQN" %in% colnames(joined_data[[cycle_years[y]]]) && "SEQN" %in% colnames(df)) {
+        # Debugging print statements
+        print(paste("Merging data for cycle:", cycle_years[y]))
+        print(paste("Columns in df:", paste(colnames(df), collapse=", ")))
+        print(paste("Columns in joined_data:", paste(colnames(joined_data[[cycle_years[y]]]), collapse=", ")))
+        
+        df <- joined_data[[cycle_years[y]]] %>% 
+          merge(df, by="SEQN", all.x = TRUE) %>% 
+          mutate_all(as.character)
+      } else {
+        print(paste("SEQN not found in one of the data frames for cycle:", cycle_years[y]))
+      }
+    }
+    
+    joined_data[[cycle_years[y]]] <- df
+  }
+}
+
+# Check that all columns line up with each other before rbind
+cols_match <- sapply(joined_data, function(x) {
+  all(colnames(x) == c("SEQN", unlist(keep_var)))
+})
+
+if (all(cols_match)) {
+  # Bind rows if columns match
+  NHANES_data <- bind_rows(joined_data, .id = "Cycle_Year")
+} else {
+  # Stop execution if columns do not match
+  stop("Column names do not match")
+}
+
+# renaming columns in NHANES to match CRIC
+old_names <- c("SEQN", "LBXSTR", "LBXSCH", "LBXSATSI", "LBXSAL", "LBXSAPSI", "LBXSASSI", 
+               "LBXSCA", "LBXSCLSI", "LBXSGL", "LBXSKSI", "LBXSNASI", "LBXSTB", 
+               "LBXSTP", "LBXSBU", "LBXSCR", "LBXMCHSI", "LBXMCVSI", "LBXRBCSI", 
+               "LBXWBCSI", "LBXHGB", "LBXHCT", "LBXPLTSI", "LBDEONO", "LBDBANO", 
+               "LBDNENO", "LBDMONO", "LBDLYMNO", "LBXGH", "LBDHDD", "LBDLDL")
+
+new_names <- c("PID", "TG", "TC", "ALANINE_AMINOTRANSFE", "SERUM_ALBUMIN", 
+               "ALKALINE_PHOSPHATASE", "ASPARTATE_AMINOTRANS", "CALCIUM", 
+               "CHLORIDE", "GLUCOSE", "POTASSIUM", "SODIUM", "TOTAL_BILIRUBIN", 
+               "TOTAL_PROTEIN", "SERUM_UREA_NITROGEN", "CREATININE_SERUM", 
+               "MCH", "MCV", "RBC", "WBC", "CBCHEMOGLOBIN", "HEMATOCRIT", 
+               "PLATELETS", "EOSINOPHILS", "BASOPHILS", "NEUTROPHILS", 
+               "MONOCYTES", "LYMPHOCYTES", "HEMOGLOBIN_A1C", "HDL", "LDL")
+
+NHANES_data_renamed <- NHANES_data %>%
+  rename_at(vars(old_names), ~ new_names) %>%
+  select(-Cycle_Year)
+
+
+convert_to_numeric <- function(data) {
+  data <- data %>% mutate(across(-PID, ~ as.numeric(as.character(.))))
+  return(data)
+}
+
+# Apply conversion to both datasets
+CRIC_data <- convert_to_numeric(CRIC_data)
+NHANES_data_renamed <- convert_to_numeric(NHANES_data_renamed)
+
+# multiply "EOSINOPHILS", "BASOPHILS", "NEUTROPHILS", "MONOCYTES", "LYMPHOCYTES" by 1000
+NHANES_data_renamed <- NHANES_data_renamed %>%
+  mutate(across(c("EOSINOPHILS", "BASOPHILS", "NEUTROPHILS", "MONOCYTES", "LYMPHOCYTES"), ~ . * 1000))
+
+# Print the updated column names to verify
+print(colnames(NHANES_data_renamed))
+
+```
+
+```{r More cleaning: mean imputation}
+
+impute_mean_and_track <- function(data) {
+  # Initialize a vector to keep track of imputed values
+  imputed_count <- numeric(ncol(data))
+  names(imputed_count) <- names(data)
+  
+  # Iterate over columns to perform imputation and track imputed values
+  for (col in names(data)) {
+    if (col != "PID") {
+      # Count NAs before imputation
+      na_count_before <- sum(is.na(data[[col]]))
+      
+      # Perform mean imputation
+      data[[col]][is.na(data[[col]])] <- mean(data[[col]], na.rm = TRUE)
+      
+      # Count NAs after imputation
+      na_count_after <- sum(is.na(data[[col]]))
+      
+      # Track number of imputed values
+      imputed_count[col] <- na_count_before - na_count_after
+    }
+  }
+  
+  # Return the modified data and imputation counts
+  list(data = data, imputed_count = imputed_count)
+}
+
+# apply
+CRIC_result <- impute_mean_and_track(CRIC_data)
+NHANES_result <- impute_mean_and_track(NHANES_data_renamed)
+
+CRIC_data_imputed <- CRIC_result$data
+NHANES_data_renamed_imputed <- NHANES_result$data
+
+imputed_counts_CRIC <- CRIC_result$imputed_count
+imputed_counts_NHANES <- NHANES_result$imputed_count
+
+# Print imputed counts
+print("Imputed counts for CRIC_data:")
+print(imputed_counts_CRIC)
+
+print("Imputed counts for NHANES_data_renamed:")
+print(imputed_counts_NHANES)
+
+# remove LDL: missingness is 56%, all others <10%
+CRIC_data <- CRIC_data %>% select(-LDL)
+NHANES_data_renamed <- NHANES_data_renamed %>% select(-LDL)
+```
+
+# EDA of both datasets, seeing if variable distributions are similar 
+```{r Histograms of variable distribution}
+plot_density <- function(data1, data2, var_name) {
+  ggplot() +
+    geom_density(data = data1, aes_string(x = var_name, fill = "'CRIC_data'"), 
+                 alpha = 0.5, position = "identity") +
+    geom_density(data = data2, aes_string(x = var_name, fill = "'NHANES_data_renamed'"), 
+                 alpha = 0.5, position = "identity") +
+    labs(title = paste(var_name), x = var_name, y = "Density") +
+    scale_fill_manual(name = "Dataset", values = c("CRIC_data" = "blue", "NHANES_data_renamed" = "green")) +
+    theme_minimal() + 
+     theme(legend.position = "none",
+           axis.title.x = element_blank(),  # Remove x axis title
+          axis.title.y = element_blank(),  # Remove y axis title
+          axis.text.x = element_blank(),   # Remove x axis labels
+          axis.text.y = element_blank(),   # Remove y axis labels
+          axis.ticks = element_blank())    # Remove axis ticks
+  
+  
+}
+
+variables <- setdiff(names(CRIC_data), "PID")
+
+# Create a list to store the plots
+plot_list <- lapply(variables, function(var) {
+  tryCatch({
+    plot_density(CRIC_data, NHANES_data_renamed, var)
+  }, error = function(e) {
+    message(paste("Error in variable:", var, "-", e$message))
+    NULL
+  })
+})
+
+imputed_plot_list <- lapply(variables, function(var) {
+  tryCatch({
+    plot_density(CRIC_data_imputed, NHANES_data_renamed_imputed, var)
+  }, error = function(e) {
+    message(paste("Error in variable:", var, "-", e$message))
+    NULL
+  })
+})
+
+for (plot in plot_list) {
+  print(plot)
+}
+
+p1  <- plot_list[[1]]
+p2  <- plot_list[[2]]
+p3  <- plot_list[[3]]
+p4  <- plot_list[[4]]
+p5  <- plot_list[[5]]
+p6  <- plot_list[[6]]
+p7  <- plot_list[[7]]
+p8  <- plot_list[[8]]
+p9  <- plot_list[[9]]
+p10 <- plot_list[[10]]
+p11 <- plot_list[[11]]
+p12 <- plot_list[[12]]
+p13 <- plot_list[[13]]
+p14 <- plot_list[[14]]
+p15 <- plot_list[[15]]
+p16 <- plot_list[[16]]
+p17 <- plot_list[[17]]
+p18 <- plot_list[[18]]
+p19 <- plot_list[[19]]
+p20 <- plot_list[[20]]
+p21 <- plot_list[[21]]
+p22 <- plot_list[[22]]
+p23 <- plot_list[[23]]
+p24 <- plot_list[[24]]
+p25 <- plot_list[[25]]
+p26 <- plot_list[[26]]
+p27 <- plot_list[[27]]
+p28 <- plot_list[[28]]
+p29 <- plot_list[[29]]
+
+# Combine the plots using the patchwork library
+p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9  + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21 + p22 + p23 + p24 + p25 + p26 + p27 + p28 + p29
+
+```
+
+```{r}
+p1  <- imputed_plot_list[[1]]
+p2  <- imputed_plot_list[[2]]
+p3  <- imputed_plot_list[[3]]
+p4  <- imputed_plot_list[[4]]
+p5  <- imputed_plot_list[[5]]
+p6  <- imputed_plot_list[[6]]
+p7  <- imputed_plot_list[[7]]
+p8  <- imputed_plot_list[[8]]
+p9  <- imputed_plot_list[[9]]
+p10 <- imputed_plot_list[[10]]
+p11 <- imputed_plot_list[[11]]
+p12 <- imputed_plot_list[[12]]
+p13 <- imputed_plot_list[[13]]
+p14 <- imputed_plot_list[[14]]
+p15 <- imputed_plot_list[[15]]
+p16 <- imputed_plot_list[[16]]
+p17 <- imputed_plot_list[[17]]
+p18 <- imputed_plot_list[[18]]
+p19 <- imputed_plot_list[[19]]
+p20 <- imputed_plot_list[[20]]
+p21 <- imputed_plot_list[[21]]
+p22 <- imputed_plot_list[[22]]
+p23 <- imputed_plot_list[[23]]
+p24 <- imputed_plot_list[[24]]
+p25 <- imputed_plot_list[[25]]
+p26 <- imputed_plot_list[[26]]
+p27 <- imputed_plot_list[[27]]
+p28 <- imputed_plot_list[[28]]
+p29 <- imputed_plot_list[[29]]
+
+# Combine the plots using the patchwork library
+p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9  + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21 + p22 + p23 + p24 + p25 + p26 + p27 + p28 + p29
+```
+```{r}
+# save datasets separately 
+write.csv(NHANES_data_renamed_imputed, file = "/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/nhanes_data.csv", row.names = FALSE)
+write.csv(CRIC_data_imputed, file = "/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/cric_data.csv", row.names = FALSE)
+```
+
