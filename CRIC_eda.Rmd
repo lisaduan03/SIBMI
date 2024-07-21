@@ -10,16 +10,17 @@ library(dplyr)
 library(tableone)
 library(tableHTML)
 library(webshot)
-library()
+library(ggpmisc)
+library(quantreg)
+
+
 
 
 # no idea what this does
 knitr::opts_chunk$set(echo = TRUE)()
 ```
 
-```{r Reading in data from manuscript}
-# https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2723966/. Fewer patients, perhaps becaue 2009 
-
+```{r}
 # 3612 rows
 manuscript_data <- read_sas("../CRIC_V11/Data/Ancillary_Data/MS004/ms004_analytical_data_final.sas7bdat")
 
@@ -27,7 +28,7 @@ manuscript_data <- read_sas("../CRIC_V11/Data/Ancillary_Data/MS004/ms004_analyti
 manuscript_filtered <- manuscript_data %>% filter(iGFR_baseline == 1)
 ```
 
-```{r Reading in data from visit level, most comprehensive, filtering}
+```{r}
 # 88731 rows (includes longitudinal)
 visit_level_data <- read_sas("../CRIC_V11/Data/Phase1andPhase3/Derived_Data/visitlevel.sas7bdat")
 
@@ -56,10 +57,46 @@ visit_level_filtered <- visit_level_filtered %>%
               select(PID, RACE_ETHNICITY_CAT2, SEX, INCOME_CAT_1), 
             by = "PID")
 
-
 ```
 
-```{r Data preprocessing sanity checks }
+```{r}
+# A few sanity checks 
+
+# 1) find PIDS in one but not the other 
+# get list of PIDs that dont match
+pids_visit_level <- visit_level_filtered %>% pull(PID)
+pids_manuscript <- manuscript_filtered %>% pull(PID)
+
+# Find the PIDs that are in visit_level_filtered but not in manuscript_filtered
+pids_only_in_visit_level <- setdiff(pids_visit_level, pids_manuscript)
+
+# Find the PIDs that are in manuscript_filtered but not in visit_level_filtered
+pids_only_in_manuscript <- setdiff(pids_manuscript, pids_visit_level)
+
+# 2) why is 05010011 in manuscript but not data: because NA value in visit_level data. May have been a mistake in 2009 that was subsequently fixed? 
+specific_row <- visit_level_first_visit %>% filter(PID == '05010011')
+print(specific_row$ADJUSTED_IGFR)
+
+# 3) check that some blood biomarker values match up between manuscript_filtered and visit_level_filtered 
+joined_data <- visit_level_filtered %>%
+  inner_join(manuscript_filtered, by = "PID", suffix = c("_visit", "_manuscript"))
+
+# Check if TG and TC columns match
+mismatched_tg <- joined_data %>% filter(TG_visit != TG_manuscript)
+mismatched_tc <- joined_data %>% filter(TC_visit != TC_manuscript)
+
+# Print the PIDs with mismatched TG and TC values
+print("PIDs with mismatched TG values:")
+print(mismatched_tg$PID)
+
+print("PIDs with mismatched TC values:")
+print(mismatched_tc$PID)
+```
+
+
+```{r using table1 package to recreate Table 1}
+# https://cran.r-project.org/web/packages/table1/# vignettes/table1-examples.html
+
 # A few sanity checks 
 
 # 1) find PIDS in one but not the other 
@@ -156,8 +193,8 @@ data <- data %>%
 population_level_difference = median(data$differences)
 print(population_level_difference)
 
-```
 
+```
 
 ```{r EDA plots}
 # 1) EGFR and iGFR by FLEXIBLE stratification
@@ -250,14 +287,22 @@ for (variable_of_interest in variables_of_interest) {
 }
 ```
 
-```{r Figure 1: Quantile Regression}
-# Quantile regression for specific quantiles at given eGFR values 
-# FIX legend!!!!
-quantiles <- c(0.025, 0.10, 0.25, 0.50, 0.75, 0.90, 0.975)
+```{r Systematic Difference: mGFR- eGFR}
 
-# https://www.rdocumentation.org/packages/quantreg/versions/2.0-2/topics/rq
+data$differences = data$IGFR - data$EGFR_CKD_EPI
+print(median(data$differences))
+
+```
+
+
+```{r Recreating Figure 1 quantile reg}
+# 1) Perform quantile regression for the specified quantiles
+# 2) use models to predict iGFR at specific eGFR values
+# 3) store in a data frame 
+# 4) plot results 
+quantiles <- c(0.025, 0.10, 0.25, 0.50, 0.75, 0.90, 0.975)
 models <- lapply(quantiles, function(tau) {
-  rq(IGFR ~ my_EGFR, data = data, tau = tau) # rq= quantile regression. IGFR is dependent, EGFR_CDK_EPI is indepndent
+  rq(IGFR ~ EGFR_CKD_EPI, data = data, tau = tau)
 })
 
 # Specified eGFR values
@@ -273,14 +318,10 @@ predicted_mGFR <- data.frame(
 # Predict mGFR values for each quantile regression model and eGFR value
 for (i in seq_along(models)) {
   for (j in seq_along(eGFR_values)) {
-    predicted_mGFR$mGFR[(j - 1) * length(quantiles) + i] <- predict(models[[i]], newdata = data.frame(my_EGFR = eGFR_values[j]))
+    predicted_mGFR$mGFR[(j - 1) * length(quantiles) + i] <- predict(models[[i]], newdata = data.frame(EGFR_CKD_EPI = eGFR_values[j]))
   }
 }
 
-# Print out the predicted values to check for issues
-print(predicted_mGFR)
-
-# Extract the 0.025 and 0.975 quantiles for the vertical lines
 quantile_025 <- predicted_mGFR %>% filter(quantile == 0.025)
 quantile_975 <- predicted_mGFR %>% filter(quantile == 0.975)
 
@@ -290,30 +331,29 @@ color_map <- c("0.025" = "red", "0.1" = "orange", "0.25" = "green", "0.5" = "bla
 
 # Plot the results
 p <- ggplot(predicted_mGFR, aes(x = eGFR, y = mGFR)) +
+  geom_segment(data = quantile_025, aes(x = eGFR, xend = eGFR, y = mGFR, yend = quantile_975$mGFR), color = "red") +
   geom_point(aes(shape = quantile, color = quantile), size = 3) +
   scale_shape_manual(values = shape_map) +
   scale_color_manual(values = color_map) +
-  scale_x_continuous(breaks = seq(0, 90, by = 15)) +
   scale_y_continuous(limits = c(0, 150)) + 
-  labs(x = "eGFR (mL/min/1.73 m^2)", y = "mGFR (mL/min/1.73 m^2)", title = "Quantile Regression for mGFR vs eGFR (no race)") +
-  theme_minimal()
+  scale_x_continuous(breaks = seq(0, 120, by = 15)) +
+  labs(x = "eGFR (mL/min/1.73 m^2)", y = "mGFR (mL/min/1.73 m^2)", title = "Quantile Regression: Modeling different percentiles of mGFR at given eGFR") +
+  theme_minimal() +
+  theme(legend.position = "none")
 
-# Add vertical lines connecting the 0.025 and 0.975 quantiles
-p <- p + geom_segment(data = quantile_025, aes(x = eGFR, xend = eGFR, y = mGFR, yend = quantile_975$mGFR), color = "red")
+# vertical lines
 
 # Add text labels for the values, color-coded and slightly shifted
 p <- p + geom_text(aes(label = round(mGFR, 1), color = quantile), 
                    vjust = -1, hjust = 1, size = 3)
 
-# Add the legend
+# add legend
 legend_labels <- c(
   "0.025" = "p2.5, p97.5",
   "0.1" = "p10, p90",
   "0.25" = "p25, p75",
   "0.5" = "p50 (median)"
 )
-
-# Adjust the legend
 p <- p + theme(legend.position = "right") +
   scale_color_manual(
     name = "Quantiles",
@@ -329,8 +369,8 @@ p <- p + theme(legend.position = "right") +
 print(p)
 ```
 
-
 ```{r Expanding Figure 1: PI as a function of eGFR, stratified by groups}
+
 
 quantiles <- c(0.025, 0.975)
 
@@ -471,12 +511,9 @@ for (demographic_col in demographic_cols) {
   
   print(p)
 }
-
-
-
 ```
 
-```{r Table 2: Bias and Inaccuracy of Estimating Equations}
+```{r}
 # Population level systematic difference/bias = median of differences (mGFR-eGFR). For CRIC: 3.0. Overall = -0.6
 # Inaccuracy = width of 95% PI interval 
 
@@ -545,3 +582,79 @@ print(final_table_with_overall)
 
 colnames
 ```
+
+
+```{r}
+# get all variables
+variables = nhanes_variables()
+
+# filter dataset for only laboratory
+laboratory_data <- variables[variables$component == "laboratory", ]
+
+# count number of unique years in which data_file_description occurs
+unique_year_counts <- laboratory_data %>%
+  group_by(data_file_description) %>%
+  summarise(unique_years = n_distinct(begin_year), .groups = 'drop')
+# sort in descending order
+unique_year_counts_sorted <- unique_year_counts %>%
+  arrange(desc(unique_years))
+# only take data files with 
+
+print(unique_year_counts_sorted)
+
+# filter laboratory_data to only include variables with data_file_description of X
+X_questionnaire_data <- laboratory_data %>%
+  filter(data_file_description == "Albumin & Creatinine - Urine")
+# see how many variables there are 
+length(unique(X_questionnaire_data$variable_name))
+list(unique(X_questionnaire_data$variable_name))
+
+
+# filter variables such that anything starting with LBX is retained
+lbx_variables = variables %>%
+  filter(grepl("^LBX", variable_name))
+
+# View the filtered data
+print(lbx_variables)
+
+# check for duplicate variable names
+duplicate_variables <- lbx_variables %>%
+  filter(duplicated(variable_name) | duplicated(variable_name, fromLast = TRUE))
+
+print(duplicate_variables)
+
+# 468  variables that appear more than once
+duplicate_variable_names <- duplicate_variables %>%
+  select(variable_name) %>%
+  distinct()
+
+
+# among the duplicate_variables, print counts
+duplicate_summary <- duplicate_variables %>%
+  filter(duplicated(variable_name) | duplicated(variable_name, fromLast = TRUE)) %>%
+  group_by(variable_name) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(desc(count))
+
+
+# View the summary of duplicates
+print(duplicate_summary)
+
+# get variables that are not duplicated, so probably need renaming
+non_duplicated_variables <- lbx_variables %>%
+  anti_join(duplicate_variable_names, by = "variable_name")
+
+print(non_duplicated_variables)
+non_duplicated_variables_names = non_duplicated_variables$variable_name
+
+# just getting a list of unique variables
+list_of_vars = unique(lbx_variables$variable_name)
+
+# check for missingness
+lbxppe_variables <- lbx_variables %>%
+  filter(variable_name == "LBXPPE")
+
+# Print the filtered data frame
+print(unique(lbx_variables$component))
+```
+
