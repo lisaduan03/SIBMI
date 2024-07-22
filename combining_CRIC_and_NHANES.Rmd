@@ -40,19 +40,20 @@ print(pids_without_vnum_3)
 visit_level_first_visit <- visit_level_data %>% filter(VNUM == 3)
 
 # filter for when there is iGFR value
-visit_level_filtered <- visit_level_first_visit %>% filter(!is.na(ADJUSTED_IGFR))
+# visit_level_filtered <- visit_level_first_visit %>% filter(!is.na(ADJUSTED_IGFR))
 
 # join with RACE_ETHNICITY_CAT2 from person level data
 person_level_data <- read_sas("/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/CRIC_V11/Data/Phase1andPhase3/Derived_Data/personlevel.sas7bdat") 
 
-visit_level_filtered <- visit_level_filtered %>%
+visit_level_filtered <- visit_level_first_visit %>%
   left_join(person_level_data %>% 
               select(PID, RACE_ETHNICITY_CAT2, SEX, INCOME_CAT_1), 
             by = "PID")
+
 ```
 
 ```{r filtering CRIC for variables of interest}
-columns_to_select <- c("PID", "TG", "TC", "HDL", "LDL", "ALANINE_AMINOTRANSFE", "SERUM_ALBUMIN", "ALKALINE_PHOSPHATASE", "ASPARTATE_AMINOTRANS", "CALCIUM", "CHLORIDE", "GLUCOSE", "HEMOGLOBIN_A1C", "POTASSIUM", "SODIUM", "TOTAL_BILIRUBIN", "TOTAL_PROTEIN", "SERUM_UREA_NITROGEN", "MCH", "MCV", "RBC", "CREATININE_SERUM", "WBC", "CBCHEMOGLOBIN", "HEMATOCRIT", "PLATELETS",  "EOSINOPHILS", "BASOPHILS", "NEUTROPHILS", "MONOCYTES", "LYMPHOCYTES")
+columns_to_select <- c("PID", "TG", "TC", "HDL", "LDL", "ALANINE_AMINOTRANSFE", "SERUM_ALBUMIN", "ALKALINE_PHOSPHATASE", "ASPARTATE_AMINOTRANS", "CALCIUM", "CHLORIDE", "GLUCOSE", "HEMOGLOBIN_A1C", "POTASSIUM", "SODIUM", "TOTAL_BILIRUBIN", "TOTAL_PROTEIN", "SERUM_UREA_NITROGEN", "MCH", "MCV", "RBC", "CREATININE_SERUM", "WBC", "CBCHEMOGLOBIN", "HEMATOCRIT", "PLATELETS",  "EOSINOPHILS", "BASOPHILS", "NEUTROPHILS", "MONOCYTES", "LYMPHOCYTES", "ADJUSTED_IGFR")
 
 CRIC_data <- visit_level_filtered %>% select(all_of(columns_to_select))
 
@@ -128,9 +129,10 @@ for(i in 1:length(to_rm)) {
 # to get 1999-2000 data
 data_file_list <- gsub("_A", "", data_file_list)
 
+destination <- "/Users/lisaduan/Dropbox/Mac/Desktop/SIBMI/SIBMI/eGFR-Race-master/nhanes_data"
 # Download and merge NHANES data using `RNHANES` package
 raw_data <- nhanes_load_data(data_file_list, year = cycle_years,
-                             destination = "nhanes_data", cache = TRUE,
+                             destination = destination, cache = TRUE,
                              demographics = FALSE, recode_data = FALSE)
 # Correction for serum creatinine in 2005-2006 as per BIOPRO_D analytic notes
 # https://wwwn.cdc.gov/Nchs/Nhanes/2005-2006/BIOPRO_D.htm
@@ -279,7 +281,7 @@ impute_mean_and_track <- function(data) {
   
   # Iterate over columns to perform imputation and track imputed values
   for (col in names(data)) {
-    if (col != "PID") {
+    if (col != "PID" && col != "ADJUSTED_IGFR") {
       # Count NAs before imputation
       na_count_before <- sum(is.na(data[[col]]))
       
@@ -341,8 +343,18 @@ plot_density <- function(data1, data2, var_name) {
   
 }
 
-variables <- setdiff(names(CRIC_data), "PID")
+variables <- setdiff(names(CRIC_data), c("PID", "ADJUSTED_IGFR"))
 
+# plot IGFR
+igfr = "ADJUSTED_IGFR"
+
+ ggplot() +
+    geom_density(data = CRIC_data, aes_string(x = igfr, fill = "'CRIC_data'"), 
+                 alpha = 0.5, position = "identity") +
+    labs(title = paste(igfr), x = igfr, y = "Density") +
+    scale_fill_manual(name = "Dataset", values = c("CRIC_data" = "blue", "NHANES_data" = "green")) +
+    theme_minimal()
+  
 # Create a list to store the plots
 plot_list <- lapply(variables, function(var) {
   tryCatch({
@@ -397,7 +409,7 @@ p28 <- plot_list[[28]]
 p29 <- plot_list[[29]]
 
 # Combine the plots using the patchwork library
-p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9  + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21 + p22 + p23 + p24 + p25 + p26 + p27 + p28 + p29
+x
 
 ```
 
