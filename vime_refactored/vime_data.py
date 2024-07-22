@@ -1,7 +1,8 @@
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.losses import BinaryCrossentropy
+from tensorflow.keras.losses import BinaryCrossentropy, MeanSquaredError
 
+# needed to revise to make compatible with tf 1.15.0
 def mask_generator_tf(p_m, x):
     """Generates a boolean mask for dataset
 
@@ -14,6 +15,11 @@ def mask_generator_tf(p_m, x):
     """
     mask = tf.keras.backend.random_bernoulli(x.shape, p_m)
     return mask
+
+    # code from GPT to make avoid using random_bernoulli
+    # random_uniform_values = tf.random_uniform(x.shape, minval=0, maxval=1)
+    # mask = tf.cast(random_uniform_values < p_m, dtype=tf.float32)
+    # return mask
 
 
 def pretext_generator_tf(m, x):
@@ -56,11 +62,9 @@ def to_vime_dataset(x, p_m, batch_size=1024, shuffle=False):
     return ds, m
 
 
-def labelled_loss_fn(y, y_preds):
-    bc = BinaryCrossentropy()
-    print("y: ", y)
-    print("y_preds: ", y_preds)
-    return bc(y, y_preds)
+def labelled_loss_fn(y, y_preds): # this should be mean squared error for regression
+    mse = MeanSquaredError()
+    return mse(y, y_preds) 
 
 
 def unlabelled_loss_fn(y):

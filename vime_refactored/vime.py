@@ -17,7 +17,7 @@ class VIME_Self(tf.keras.models.Model):
 
         self.feature_decoder = Sequential(
             [
-                Dense(self.num_features, activation="sigmoid"),
+                Dense(self.num_features), # this was origianlly sigmoid
             ]
         )
 
@@ -45,7 +45,7 @@ class VIME(tf.keras.models.Model):
             [
                 Dense(128, activation="relu"),
                 Dense(128, activation="relu"),
-                Dense(1, activation='sigmoid'),
+                Dense(1),
             ]
         )
 
